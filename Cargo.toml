@@ -1,0 +1,36 @@
+[package]
+name = "umm-next"
+version = "0.1.0"
+edition = "2024"
+description = "A programmable auto-grader for introductory CS courses."
+
+[dependencies]
+ad-astra = { git = "https://github.com/Eliah-Lakhin/ad-astra", rev = "ab7fbad5077fd1529266031aae336e2d9145f35e" }
+anyhow = { version = "1.0.94", features = ["backtrace"] }
+state = "0.6.0"
+thiserror = "2.0.8"
+tree-sitter = "0.24.5"
+tree-sitter-java = "0.23.4"
+which = "7.0.1"
+reqwest = { version = "0.12.9", features = ["json", "rustls-tls", "blocking"] }
+tokio = { version = "1.42.0", features = ["full"] }
+bpaf = { version = "0.9.15", features = ["bright-color", "supports-color"] }
+similar = { version = "2.6.0", features = [
+  "text",
+  "inline",
+  "unicode",
+  "unicode-segmentation",
+] }
+owo-colors = { version = "4.1.0", features = [
+  "supports-color",
+  "supports-colors",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10.68", features = ["vendored"] }
+reqwest = { version = "0.12.9", features = ["json"] }
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
