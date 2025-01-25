@@ -1,17 +1,72 @@
-reorder_imports = true
-imports_layout = "Vertical"
+########################################################
+# Basic Configuration
+########################################################
+
+# Because `merge_imports` is deprecated, use this instead:
 imports_granularity = "Crate"
-newline_style = "Unix"
-enum_discrim_align_threshold = 20
-format_code_in_doc_comments = true
-format_strings = true
-overflow_delimited_expr = true
-reorder_impl_items = true
+
+# Keep imports sorted
+reorder_imports = true
+
+# Group standard-library vs. external crate imports
 group_imports = "StdExternalCrate"
+
+# Reorder mod statements 
 reorder_modules = true
+
+# Force Unix line endings
+newline_style = "Unix"
+
+# The target maximum width of a line
+max_width = 100
+
+# Indentation style: "Visual" can give a more column-like alignment
+indent_style = "Visual"
+
+########################################################
+# Alignment & Layout
+########################################################
+
+# Align struct fields if the longest field name is <= threshold
+# Increase beyond 20 if you want deeper alignment.
 struct_field_align_threshold = 20
-struct_lit_single_line = false
-use_field_init_shorthand = true
+
+# Enum discriminant alignment is often unstable, but if your rustfmt
+# version supports it and doesn't warn, set it:
+enum_discrim_align_threshold = 20
+
+# Layout for function parameters: "Tall" (default), "Compressed", or "Vertical".
+# "Vertical" is somewhat more “columnar” if you have multiple parameters.
+fn_params_layout = "Vertical"
+
+# No stable option for controlling function call alignment beyond
+# `fn_call_width` + `indent_style = "Visual"`
+# so let’s set fn_call_width to a smaller threshold, forcing wrapping:
+fn_call_width = 60
+
+########################################################
+# Comments & Code Blocks
+########################################################
+
+# Wrap comments (including doc comments) at max_width
 wrap_comments = true
 
+# Attempt to format code blocks in doc comments
+format_code_in_doc_comments = true
 
+########################################################
+# Other Tweaks
+########################################################
+
+# Use shorthand field initialization (Foo { x, y }).
+use_field_init_shorthand = true
+
+# If you want to reorder impl items (unstable):
+# reorder_impl_items = true
+
+# You can also normalize block comment style:
+normalize_comments = true
+normalize_doc_attributes = true
+
+# Additional string formatting at line breaks
+format_strings = true
