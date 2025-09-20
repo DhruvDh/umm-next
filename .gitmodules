@@ -1,3 +1,4 @@
 [submodule "docs"]
 	path = docs
 	url = https://github.com/DhruvDh/umm_docs.git
+	branch = main
