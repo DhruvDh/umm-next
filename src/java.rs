@@ -5,7 +5,7 @@ use std::{
     fmt::Formatter,
     hash::{Hash, Hasher},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
 
@@ -16,12 +16,95 @@ use snailquote::unescape;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::{
-    Dict,
-    constants::*,
+    Dict, config,
+    constants::{
+        CLASS_CONSTRUCTOR_QUERY, CLASS_DECLARATION_QUERY, CLASS_FIELDS_QUERY, CLASS_METHOD_QUERY,
+        CLASSNAME_QUERY, IMPORT_QUERY, INTERFACE_CONSTANTS_QUERY, INTERFACE_DECLARATION_QUERY,
+        INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY, JUNIT_PLATFORM, PACKAGE_QUERY,
+        TEST_ANNOTATION_QUERY,
+    },
     grade::{JavacDiagnostic, LineRef},
     parsers::parser,
-    util::*,
+    util::{classpath, download, find_files, java_path, javac_path, sourcepath},
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents standard workspace paths for a Java project.
+pub struct ProjectPaths {
+    /// Root directory of the project workspace.
+    root_dir:   PathBuf,
+    /// `src/` directory containing production sources.
+    source_dir: PathBuf,
+    /// `target/` build output directory.
+    build_dir:  PathBuf,
+    /// `test/` directory containing student tests.
+    test_dir:   PathBuf,
+    /// `lib/` directory holding downloaded jars.
+    lib_dir:    PathBuf,
+    /// `.umm/` metadata directory maintained by the tool.
+    umm_dir:    PathBuf,
+}
+
+impl ProjectPaths {
+    /// Creates a new set of workspace paths rooted at `root_dir`.
+    pub fn new(root_dir: PathBuf) -> Self {
+        let source_dir = root_dir.join("src");
+        let build_dir = root_dir.join("target");
+        let test_dir = root_dir.join("test");
+        let lib_dir = root_dir.join("lib");
+        let umm_dir = root_dir.join(".umm");
+
+        Self {
+            root_dir,
+            source_dir,
+            build_dir,
+            test_dir,
+            lib_dir,
+            umm_dir,
+        }
+    }
+
+    /// Returns the platform specific separator character for javac paths.
+    pub fn separator(&self) -> &'static str {
+        if cfg!(windows) { ";" } else { ":" }
+    }
+
+    /// Root directory for the project.
+    pub fn root_dir(&self) -> &Path {
+        self.root_dir.as_path()
+    }
+
+    /// Source directory for the project.
+    pub fn source_dir(&self) -> &Path {
+        self.source_dir.as_path()
+    }
+
+    /// Build directory for the project.
+    pub fn build_dir(&self) -> &Path {
+        self.build_dir.as_path()
+    }
+
+    /// Test directory for the project.
+    pub fn test_dir(&self) -> &Path {
+        self.test_dir.as_path()
+    }
+
+    /// Library directory for the project.
+    pub fn lib_dir(&self) -> &Path {
+        self.lib_dir.as_path()
+    }
+
+    /// Directory for umm artefacts.
+    pub fn umm_dir(&self) -> &Path {
+        self.umm_dir.as_path()
+    }
+}
+
+impl Default for ProjectPaths {
+    fn default() -> Self {
+        Self::new(PathBuf::from("."))
+    }
+}
 
 /// Types of Java files -
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +143,8 @@ pub struct File {
     parser:       Parser,
     /// Concise description of the file
     description:  String,
+    /// Workspace paths associated with this file
+    paths:        ProjectPaths,
 }
 
 /// Two `File`s are equal if their paths are equal
@@ -85,15 +170,11 @@ impl Hash for File {
 /// JavaFile.
 pub struct Project {
     /// Collection of java files in this project
-    files:      Vec<File>,
+    files: Vec<File>,
     /// Names of java files in this project.
-    names:      Vec<String>,
-    /// Classpath
-    classpath:  Vec<String>,
-    /// Source path
-    sourcepath: Vec<String>,
-    /// Root directory
-    root_dir:   String,
+    names: Vec<String>,
+    /// Workspace paths associated with this project
+    paths: ProjectPaths,
 }
 
 #[derive(Clone)]
@@ -262,7 +343,7 @@ impl File {
     /// Creates a new `File` from `path`
     ///
     /// * `path`: the path to read and try to create a File instance for.
-    fn new(path: PathBuf) -> Result<Self> {
+    fn new(path: PathBuf, paths: ProjectPaths) -> Result<Self> {
         let parser = {
             let source_code = std::fs::read_to_string(&path)
                 .with_context(|| format!("Could not read file: {:?}", &path))?;
@@ -501,27 +582,30 @@ impl File {
             proper_name,
             parser,
             description,
+            paths,
         })
     }
 
     /// Returns the inner doc check of this [`File`].
     fn inner_doc_check(&self, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
+        let source_path = sourcepath(&self.paths)?;
+        let class_path = classpath(&self.paths)?;
+        let build_dir = self.paths.build_dir().to_str().unwrap_or(".").to_string();
+
         Command::new(javac_path()?)
             .stderr(err)
             .stdout(out)
             .stdin(in_)
-            .args([
-                "--source-path",
-                sourcepath()?.as_str(),
-                "-g",
-                "--class-path",
-                classpath()?.as_str(),
-                "-d",
-                BUILD_DIR.to_str().unwrap(),
-                self.path.as_path().to_str().unwrap(),
-                "-Xdiags:verbose",
-                "-Xdoclint", // "-Xlint",
-            ])
+            .arg("--source-path")
+            .arg(source_path.as_str())
+            .arg("-g")
+            .arg("--class-path")
+            .arg(class_path.as_str())
+            .arg("-d")
+            .arg(build_dir)
+            .arg(self.path.as_path())
+            .arg("-Xdiags:verbose")
+            .arg("-Xdoclint")
             .output()
             .context("Failed to spawn javac process.")
     }
@@ -549,25 +633,24 @@ impl File {
 
     /// Returns the inner check of this [`File`].
     fn inner_check(&self, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
-        let path = self.path.display().to_string();
+        let source_path = sourcepath(&self.paths)?;
+        let class_path = classpath(&self.paths)?;
+        let build_dir = self.paths.build_dir().to_str().unwrap_or(".").to_string();
 
         Command::new(javac_path()?)
             .stderr(err)
             .stdout(out)
             .stdin(in_)
-            .args([
-                "--source-path",
-                sourcepath()?.as_str(),
-                "-g",
-                "--class-path",
-                classpath()?.as_str(),
-                "-d",
-                BUILD_DIR.to_str().unwrap(),
-                path.as_str(),
-                "-Xdiags:verbose",
-                // "-Xlint",
-                "-Xprefer:source",
-            ])
+            .arg("--source-path")
+            .arg(source_path.as_str())
+            .arg("-g")
+            .arg("--class-path")
+            .arg(class_path.as_str())
+            .arg("-d")
+            .arg(build_dir)
+            .arg(self.path.as_path())
+            .arg("-Xdiags:verbose")
+            .arg("-Xprefer:source")
             .output()
             .context("Failed to spawn javac process.")
     }
@@ -614,13 +697,13 @@ impl File {
             })?;
         }
 
+        let class_path = classpath(&self.paths)?;
+
         if let Some(input_str) = input {
             let mut child = Command::new(java_path()?)
-                .args([
-                    "--class-path",
-                    classpath()?.as_str(),
-                    self.proper_name.clone().as_str(),
-                ])
+                .arg("--class-path")
+                .arg(class_path.as_str())
+                .arg(self.proper_name.clone())
                 .stdin(Stdio::piped())
                 .stdout(out)
                 .stderr(err)
@@ -641,11 +724,9 @@ impl File {
                 .context("Error when waiting for child process to finish")
         } else {
             Command::new(java_path()?)
-                .args([
-                    "--class-path",
-                    classpath()?.as_str(),
-                    self.proper_name.clone().as_str(),
-                ])
+                .arg("--class-path")
+                .arg(class_path.as_str())
+                .arg(self.proper_name.clone())
                 .stdin(Stdio::inherit())
                 .stdout(out)
                 .stderr(err)
@@ -711,29 +792,28 @@ impl File {
             .collect::<Vec<String>>();
         let methods: Vec<&str> = tests.iter().map(String::as_str).collect();
 
-        Command::new(java_path().context("Could not find `java` command on path.")?)
-            .stderr(err)
-            .stdout(out)
-            .stdin(in_)
-            .args(
-                [
-                    [
-                        "-jar",
-                        LIB_DIR.join(JUNIT_PLATFORM).as_path().to_str().unwrap(),
-                        "--disable-banner",
-                        "--disable-ansi-colors",
-                        "--details-theme=unicode",
-                        "--single-color",
-                        "-cp",
-                        &classpath()?,
-                    ]
-                    .as_slice(),
-                    methods.as_slice(),
-                ]
-                .concat(),
-            )
-            .output()
-            .context("Failed to spawn javac process.")
+        let junit_jar = self.paths.lib_dir().join(JUNIT_PLATFORM);
+        let class_path = classpath(&self.paths)?;
+
+        let mut command =
+            Command::new(java_path().context("Could not find `java` command on path.")?);
+        command.stderr(err).stdout(out).stdin(in_);
+
+        command
+            .arg("-jar")
+            .arg(junit_jar)
+            .arg("--disable-banner")
+            .arg("--disable-ansi-colors")
+            .arg("--details-theme=unicode")
+            .arg("--single-color")
+            .arg("-cp")
+            .arg(class_path.as_str());
+
+        for method in methods {
+            command.arg(method);
+        }
+
+        command.output().context("Failed to spawn javac process.")
     }
 
     /// A utility method that takes a list of strings (or types that implement
@@ -873,18 +953,25 @@ impl Project {
     pub fn new() -> Result<Self> {
         let mut files = vec![];
         let mut names = vec![];
+        let paths = ProjectPaths::default();
 
-        let rt = RUNTIME.handle().clone();
-        let handles = FuturesUnordered::new();
+        let runtime = config::runtime();
+        let rt = runtime.handle().clone();
+        let paths_for_search = paths.clone();
+        let rt_for_spawn = rt.clone();
 
-        let results = rt.block_on(async {
-            let found_files = match find_files("java", 15, &ROOT_DIR) {
+        let results = rt.block_on(async move {
+            let found_files = match find_files("java", 15, paths_for_search.root_dir()) {
                 Ok(f) => f,
                 Err(e) => panic!("Could not find java files: {e}"),
             };
 
+            let handles = FuturesUnordered::new();
+
             for path in found_files {
-                handles.push(rt.spawn_blocking(|| File::new(path)))
+                let file_paths = paths_for_search.clone();
+                let handle_clone = rt_for_spawn.clone();
+                handles.push(handle_clone.spawn_blocking(move || File::new(path, file_paths)));
             }
 
             join_all(handles).await
@@ -896,23 +983,10 @@ impl Project {
             files.push(file);
         }
 
-        let classpath = vec![LIB_DIR.join("*.jar").display().to_string()];
-
-        let mut sourcepath = vec![
-            SOURCE_DIR.join("").display().to_string(),
-            TEST_DIR.join("").display().to_string(),
-        ];
-
-        if !find_files("java", 0, &ROOT_DIR)?.is_empty() {
-            sourcepath.push(ROOT_DIR.join("").display().to_string());
-        }
-
         let proj = Self {
             files,
             names,
-            classpath,
-            sourcepath,
-            root_dir: ROOT_DIR.display().to_string(),
+            paths: paths.clone(),
         };
 
         let proj_clone = proj.clone();
@@ -961,6 +1035,11 @@ impl Project {
         self.identify(name).is_ok()
     }
 
+    /// Returns the workspace paths associated with this project.
+    pub fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
     /// Downloads certain libraries like JUnit if found in imports.
     /// times out after 20 seconds.
     pub async fn download_libraries_if_needed(&self) -> Result<()> {
@@ -980,77 +1059,100 @@ impl Project {
         };
 
         if need_junit {
-            if !LIB_DIR.as_path().is_dir() {
-                std::fs::create_dir(LIB_DIR.as_path()).unwrap();
+            let lib_dir = self.paths.lib_dir().to_path_buf();
+
+            if !lib_dir.is_dir() {
+                std::fs::create_dir(lib_dir.as_path()).unwrap();
             }
 
-            let handle1 = tokio::spawn(async {
-                download(
+            let handle1 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
                     "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/junit-platform-console-standalone-1.10.2.jar",
-                    &LIB_DIR.join(JUNIT_PLATFORM),
+                    &lib_dir.join(JUNIT_PLATFORM),
                 false
                         )
                         .await
-            });
+                })
+            };
 
-            let handle2 = tokio::spawn(async {
-                download(
-                    "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/junit-4.13.2.jar",
-                    &LIB_DIR.join("junit-4.13.2.jar"),
-                    false,
-                )
-                .await
-            });
+            let handle2 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
+                        "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/junit-4.13.2.jar",
+                        &lib_dir.join("junit-4.13.2.jar"),
+                        false,
+                    )
+                    .await
+                })
+            };
 
-            let handle3 = tokio::spawn(async {
-                download(
-                    "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-1.16.1.jar",
-                    &LIB_DIR.join("pitest.jar"),
-                    false,
-                )
-                .await
-            });
+            let handle3 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
+                        "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-1.16.1.jar",
+                        &lib_dir.join("pitest.jar"),
+                        false,
+                    )
+                    .await
+                })
+            };
 
-            let handle4 = tokio::spawn(async {
-                download(
+            let handle4 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
                         "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-command-line-1.16.1.jar",
-                        &LIB_DIR.join("pitest-command-line.jar"),
+                        &lib_dir.join("pitest-command-line.jar"),
                         false,
                     )
                     .await
-            });
+                })
+            };
 
-            let handle5 = tokio::spawn(async {
-                download(
-                    "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-entry-1.16.1.jar",
-                    &LIB_DIR.join("pitest-entry.jar"),
-                    false,
-                )
-                .await
-            });
+            let handle5 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
+                        "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-entry-1.16.1.jar",
+                        &lib_dir.join("pitest-entry.jar"),
+                        false,
+                    )
+                    .await
+                })
+            };
 
-            let handle6 = tokio::spawn(async {
-                download(
+            let handle6 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
                         "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/pitest-junit5-plugin-1.2.1.jar",
-                        &LIB_DIR.join("pitest-junit5-plugin.jar"),
+                        &lib_dir.join("pitest-junit5-plugin.jar"),
                         false,
                     )
                     .await
-            });
+                })
+            };
 
-            let handle7 = tokio::spawn(async {
-                download(
+            let handle7 = {
+                let lib_dir = lib_dir.clone();
+                tokio::spawn(async move {
+                    download(
                         "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/commons-text-1.12.0.jar",
-                        &LIB_DIR.join("commons-text-1.12.0.jar"),
+                        &lib_dir.join("commons-text-1.12.0.jar"),
                         false,
                     )
                     .await
-            });
+                })
+            };
 
-            let handle8 = tokio::spawn(async {
+            let handle8 = tokio::spawn(async move {
                 download(
                         "https://ummfiles.fra1.digitaloceanspaces.com/jar_files/commons-lang3-3.14.0.jar",
-                        &LIB_DIR.join("commons-lang3-3.14.0.jar"),
+                        &lib_dir.join("commons-lang3-3.14.0.jar"),
                         false,
                     )
                     .await
@@ -1113,14 +1215,15 @@ impl Project {
         let id = uuid::Uuid::new_v4().to_string();
         let submission = serde_json::to_string(&SubmissionRow {
             id:      id.clone(),
-            course:  COURSE.to_string(),
-            term:    TERM.to_string(),
+            course:  config::course().to_string(),
+            term:    config::term().to_string(),
             content: markdown,
         })?;
 
-        let rt = RUNTIME.handle().clone();
-        rt.block_on(async {
-            POSTGREST_CLIENT
+        let runtime = config::runtime();
+        let client = config::postgrest_client();
+        runtime.block_on(async {
+            client
                 .from("submissions")
                 .insert(submission)
                 .execute()

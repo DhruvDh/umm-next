@@ -27,10 +27,8 @@ use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
 use umm::{
-    clean,
-    constants::{LIB_DIR, ROOT_DIR, SOURCE_DIR, TEST_DIR},
-    grade,
-    java::Project,
+    clean, grade,
+    java::{Project, ProjectPaths},
 };
 use walkdir::WalkDir;
 
@@ -244,6 +242,7 @@ fn main() -> Result<()> {
         }
         Cmd::Grade(g) => grade(&g)?,
         Cmd::CreateSubmission(p) => {
+            let paths = ProjectPaths::default();
             let zip_file_name = format!(
                 "submission-{}.zip",
                 chrono::offset::Local::now().format("%Y-%m-%d-%H-%M-%S")
@@ -251,15 +250,15 @@ fn main() -> Result<()> {
             let zip_file = std::fs::File::create(PathBuf::from(zip_file_name.clone()))?;
 
             let all_files = {
-                let source_walkdir: Vec<_> = WalkDir::new(SOURCE_DIR.as_path())
+                let source_walkdir: Vec<_> = WalkDir::new(paths.source_dir())
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .collect();
-                let lib_walkdir: Vec<_> = WalkDir::new(LIB_DIR.as_path())
+                let lib_walkdir: Vec<_> = WalkDir::new(paths.lib_dir())
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .collect();
-                let test_walkdir: Vec<_> = WalkDir::new(TEST_DIR.as_path())
+                let test_walkdir: Vec<_> = WalkDir::new(paths.test_dir())
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .collect();
@@ -286,7 +285,7 @@ fn main() -> Result<()> {
             let mut already_added = HashSet::<PathBuf>::new();
 
             for entry in all_files {
-                let path = match entry.path().strip_prefix(ROOT_DIR.as_path()) {
+                let path = match entry.path().strip_prefix(paths.root_dir()) {
                     Ok(path) => path,
                     Err(_) => entry.path(),
                 };
@@ -297,7 +296,7 @@ fn main() -> Result<()> {
                     already_added.insert(path.to_path_buf());
                 }
 
-                let mut name = PathBuf::from(ROOT_DIR.as_path());
+                let mut name = paths.root_dir().to_path_buf();
                 name.push(path);
 
                 if path.is_file() {

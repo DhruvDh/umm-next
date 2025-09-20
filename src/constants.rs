@@ -1,95 +1,16 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
-use postgrest::Postgrest;
 use rhai::AST;
 use state::InitCell;
 
-// TODO: replace with https://lib.rs/crates/state
-/// Fetch an environment variable or exit with a user-friendly message if it is
-/// missing.
-fn get_required_env(key: &str) -> String {
-    match std::env::var(key) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!(
-                "Missing required environment variable: {}.\n\nSet {} to configure Supabase and \
-                 try again.",
-                key, key
-            );
-            std::process::exit(2);
-        }
-    }
-}
-
 lazy_static! {
-    /// Path to project root
-    pub static ref ROOT_DIR: PathBuf = PathBuf::from(".");
-    /// Directory for source files
-    pub static ref SOURCE_DIR: PathBuf = PathBuf::from(".").join("src");
-    /// Directory to store compiler artifacts
-    pub static ref BUILD_DIR: PathBuf = PathBuf::from(".").join("target");
-    /// Directory for test files
-    pub static ref TEST_DIR: PathBuf = PathBuf::from(".").join("test");
-    /// Directory for libraries, jars
-    pub static ref LIB_DIR: PathBuf = PathBuf::from(".").join("lib");
-    /// Directory for `umm` artifacts
-    pub static ref UMM_DIR: PathBuf = PathBuf::from(".").join(".umm");
-    /// Platform specific separator character for javac paths
-    pub static ref SEPARATOR: &'static str = if cfg!(windows) { ";" } else { ":" };
-    /// Supabase anon key (ENV: SUPABASE_ANON_KEY). Required.
-    pub static ref SUPABASE_KEY: String = get_required_env("SUPABASE_ANON_KEY");
-    /// PostGrest client; URL derived from ENV SUPABASE_URL (base) with /rest/v1. Required.
-    pub static ref POSTGREST_CLIENT: Postgrest = {
-        let base_url = get_required_env("SUPABASE_URL");
-        let rest_url = format!("{}/rest/v1", base_url.trim_end_matches('/'));
-        Postgrest::new(rest_url).insert_header("apiKey", SUPABASE_KEY.clone())
-    };
-    /// Runtime
-    pub static ref RUNTIME: tokio::runtime::Runtime = tokio::runtime::Runtime::new().unwrap();
-    /// ChatGPT System Message intro
-    pub static ref SYSTEM_MESSAGE_INTRO: String = include_str!("prompts/system_message_intro.md").into();
-    /// ChatGPT System Message outro
-    pub static ref SYSTEM_MESSAGE_OUTRO: String = include_str!("prompts/system_message_outro.md").into();
-    /// Entire ChatGPT System Message
-    pub static ref SYSTEM_MESSAGE: String = format!("{}\n{}", *SYSTEM_MESSAGE_INTRO, *SYSTEM_MESSAGE_OUTRO);
-    /// Retrieval System Message intro
-    pub static ref RETRIEVAL_MESSAGE_INTRO: String = include_str!("prompts/retrieval_system_message_intro.md").into();
-    /// Retrieval System Message outro
-    pub static ref RETRIEVAL_MESSAGE_OUTRO: String = include_str!("prompts/retrieval_system_message_outro.md").into();
     /// Rhai script as a AST, behind an mutex.
     pub static ref SCRIPT_AST: Arc<Mutex<AST>> = Arc::new(Mutex::new(AST::empty()));
-    /// System Message for Algorithmic Solutions SLO
-    pub static ref ALGORITHMIC_SOLUTIONS_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/algorithmic_solutions_quant.md"));
-    /// System Message for Code Readability SLO
-    pub static ref CODE_READABILITY_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/code_readability_written_com.md"));
-    /// System Message for Comments Written SLO
-    pub static ref COMMENTS_WRITTEN_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/comments_written_com.md"));
-    /// System Message for Error Handling SLO
-    pub static ref ERROR_HANDLING_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/error_handling_verification.md"));
-    /// System Message for Logic SLO
-    pub static ref LOGIC_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/logic_programming.md"));
-    /// System Message for Naming Conventions SLO
-    pub static ref NAMING_CONVENTIONS_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/naming_written_com.md"));
-    /// System Message for Object Oriented Programming SLO
-    pub static ref OBJECT_ORIENTED_PROGRAMMING_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/oop_programming.md"));
-    /// System Message for Syntax SLO
-    pub static ref SYNTAX_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/syntax_programming.md"));
-    /// System Message for Testing SLO
-    pub static ref TESTING_SLO: String = format!(include_str!("prompts/slos/system_message_intro.md"), SLO_DESCRIPTION = include_str!("prompts/slos/testing_verification.md"));
 }
-
-/// Current term. TODO: Move this to init script
-pub const TERM: &str = "Fall 2022";
-
-/// Current course. TODO: Move this to init script
-pub const COURSE: &str = "ITSC 2214";
 
 /// Prompt truncation length
 pub const PROMPT_TRUNCATE: usize = 15000;

@@ -37,15 +37,10 @@ use tabled::{
 use typed_builder::TypedBuilder;
 
 use crate::{
-    Dict,
-    constants::{
-        ALGORITHMIC_SOLUTIONS_SLO, CODE_READABILITY_SLO, COMMENTS_WRITTEN_SLO, ERROR_HANDLING_SLO,
-        LOGIC_SLO, METHOD_CALL_QUERY, NAMING_CONVENTIONS_SLO, OBJECT_ORIENTED_PROGRAMMING_SLO,
-        POSTGREST_CLIENT, PROMPT_TRUNCATE, RETRIEVAL_MESSAGE_INTRO, ROOT_DIR, RUNTIME, SCRIPT_AST,
-        SOURCE_DIR, SYNTAX_SLO, SYSTEM_MESSAGE, TESTING_SLO, USE_ACTIVE_RETRIEVAL,
-    },
+    Dict, config,
+    constants::{METHOD_CALL_QUERY, PROMPT_TRUNCATE, SCRIPT_AST, USE_ACTIVE_RETRIEVAL},
     create_engine,
-    java::{File, FileType, JavaFileError, Parser, Project},
+    java::{File, FileType, JavaFileError, Parser, Project, ProjectPaths},
     parsers::parser,
     util::{classpath, java_path},
 };
@@ -321,9 +316,18 @@ pub fn get_active_retrieval_context(
 
     print!("Trying to decide what to share with AI for feedback...");
 
+    let prompts = config::prompts();
+
+    let java_file_names = proj.files().iter().map(File::proper_name).join(", ");
+    let synthesized_outline = proj.describe();
+    let outro_template = prompts.retrieval_message_outro();
+    let outro = outro_template
+        .replace("{JAVA_FILE_NAMES}", &java_file_names)
+        .replace("{SYNTHESIZED_OUTLINE}", &synthesized_outline);
+
     let messages: Vec<ChatCompletionRequestMessage> = vec![
         ChatCompletionRequestSystemMessageArgs::default()
-            .content(RETRIEVAL_MESSAGE_INTRO.to_string())
+            .content(prompts.retrieval_message_intro().to_string())
             .name("Instructor".to_string())
             .build()?
             .into(),
@@ -337,11 +341,7 @@ pub fn get_active_retrieval_context(
             .build()?
             .into(),
         ChatCompletionRequestSystemMessageArgs::default()
-            .content(format!(
-                include_str!("prompts/retrieval_system_message_outro.md"),
-                JAVA_FILE_NAMES = proj.files().iter().map(File::proper_name).join(", "),
-                SYNTHESIZED_OUTLINE = proj.describe(),
-            ))
+            .content(outro)
             .name("Instructor".to_string())
             .build()?
             .into(),
@@ -682,6 +682,7 @@ impl DocsGrader {
     pub fn grade_docs(self) -> Result<GradeResult> {
         let mut diags = vec![];
         let mut all_diags = vec![];
+        let prompts = config::prompts();
         let files: Vec<String> = self
             .files
             .iter()
@@ -699,7 +700,7 @@ impl DocsGrader {
                 Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
                     let messages = vec![
                         ChatCompletionRequestSystemMessageArgs::default()
-                            .content(SYSTEM_MESSAGE.to_string())
+                            .content(prompts.system_message().to_string())
                             .name("Instructor".to_string())
                             .build()?
                             .into(),
@@ -721,7 +722,7 @@ impl DocsGrader {
                 Err(e) => {
                     let messages = vec![
                         ChatCompletionRequestSystemMessageArgs::default()
-                            .content(SYSTEM_MESSAGE.to_string())
+                            .content(prompts.system_message().to_string())
                             .name("Instructor".to_string())
                             .build()?
                             .into(),
@@ -798,7 +799,7 @@ impl DocsGrader {
 
             Some(vec![
                 ChatCompletionRequestSystemMessageArgs::default()
-                    .content(SYSTEM_MESSAGE.to_string())
+                    .content(prompts.system_message().to_string())
                     .name("Instructor".to_string())
                     .build()?
                     .into(),
@@ -1004,7 +1005,8 @@ impl ByUnitTestGrader {
             (updated_stacktrace, all_diags)
         };
 
-        let initial_message = new_system_message(SYSTEM_MESSAGE.to_string());
+        let system_message = config::prompts().system_message().to_string();
+        let initial_message = new_system_message(system_message.clone());
 
         if !reasons.is_empty() {
             reasons.push("Tests will not be run until above is fixed.".into());
@@ -1241,46 +1243,54 @@ impl UnitTestGrader {
             })
             .try_collect()?;
 
+        let class_path = classpath(project.paths())?;
+        let source_dirs = [
+            project.paths().source_dir().to_str().unwrap_or("."),
+            project.paths().root_dir().to_str().unwrap_or("."),
+        ]
+        .join(",");
+
         let child = Command::new(java_path()?)
-            .args([
-                "--class-path",
-                classpath()?.as_str(),
-                "org.pitest.mutationtest.commandline.MutationCoverageReport",
-                "--reportDir",
-                "test_reports",
-                "--failWhenNoMutations",
-                "true",
-                "--threads",
-                "6",
-                "--targetClasses",
-                target_class.join(",").as_str(),
-                "--targetTests",
-                target_test.join(",").as_str(),
-                "--sourceDirs",
-                [
-                    SOURCE_DIR.to_str().unwrap_or("."),
-                    ROOT_DIR.to_str().unwrap_or("."),
-                ]
-                .join(",")
-                .as_str(),
-                "--timestampedReports",
-                "false",
-                "--outputFormats",
-                "HTML,CSV",
-                "--mutators",
-                "STRONGER",
-                "--excludedMethods",
-                excluded_methods.join(",").as_str(),
-                "--avoidCallsTo",
-                avoid_calls_to.join(",").as_str(),
-            ])
+            .arg("--class-path")
+            .arg(class_path.as_str())
+            .arg("org.pitest.mutationtest.commandline.MutationCoverageReport")
+            .arg("--reportDir")
+            .arg("test_reports")
+            .arg("--failWhenNoMutations")
+            .arg("true")
+            .arg("--threads")
+            .arg("6")
+            .arg("--targetClasses")
+            .arg(target_class.join(","))
+            .arg("--targetTests")
+            .arg(target_test.join(","))
+            .arg("--sourceDirs")
+            .arg(source_dirs)
+            .arg("--timestampedReports")
+            .arg("false")
+            .arg("--outputFormats")
+            .arg("HTML,CSV")
+            .arg("--mutators")
+            .arg("STRONGER")
+            .arg("--excludedMethods")
+            .arg(excluded_methods.join(","))
+            .arg("--avoidCallsTo")
+            .arg(avoid_calls_to.join(","))
             .output()
             .context("Failed to spawn javac process.")?;
 
+        let prompts = config::prompts();
+
         if child.status.success() {
             fs::create_dir_all("test_reports")?;
-            let file = fs::File::open(ROOT_DIR.join("test_reports").join("mutations.csv"))
-                .context("Could not read ./test_reports/mutations.csv file".to_string())?;
+            let file = fs::File::open(
+                project
+                    .paths()
+                    .root_dir()
+                    .join("test_reports")
+                    .join("mutations.csv"),
+            )
+            .context("Could not read ./test_reports/mutations.csv file".to_string())?;
             let reader = BufReader::new(file);
             let mut diags = vec![];
 
@@ -1318,7 +1328,7 @@ impl UnitTestGrader {
 
                 Some(vec![
                     ChatCompletionRequestSystemMessageArgs::default()
-                        .content(SYSTEM_MESSAGE.to_string())
+                        .content(prompts.system_message().to_string())
                         .name("Instructor".to_string())
                         .build()
                         .context("Failed to build system message")?
@@ -1366,7 +1376,7 @@ impl UnitTestGrader {
             let prompt = if !output.is_empty() {
                 Some(vec![
                     ChatCompletionRequestSystemMessageArgs::default()
-                        .content(SYSTEM_MESSAGE.to_string())
+                        .content(prompts.system_message().to_string())
                         .name("Instructor".to_string())
                         .build()
                         .context("Failed to build system message")?
@@ -1475,7 +1485,10 @@ impl ByHiddenTestGrader {
             .bytes()
             .context(format!("Failed to get response as bytes: {url}"))?;
 
-        let path = ROOT_DIR.join(format!("{test_class_name}.java"));
+        let root_paths = ProjectPaths::default();
+        let path = root_paths
+            .root_dir()
+            .join(format!("{test_class_name}.java"));
         let mut file = fs::File::create(&path)?;
         file.write_all(&test_source)?;
 
@@ -1790,46 +1803,47 @@ async fn generate_slo_responses(
     project_description: &str,
     enabled_slos: &HashSet<String>, // New parameter
 ) -> Result<Vec<(&'static str, Result<CreateChatCompletionResponse, OpenAIError>)>> {
+    let prompts = config::prompts();
     let slos = vec![
         (
             "slo_algorithmic_solutions",
             "Algorithmic Solutions",
-            ALGORITHMIC_SOLUTIONS_SLO.as_str(),
+            prompts.algorithmic_solutions_slo(),
             SLOFileType::Source,
         ),
         (
             "slo_code_readability",
             "Code Readability and Formatting",
-            CODE_READABILITY_SLO.as_str(),
+            prompts.code_readability_slo(),
             SLOFileType::SourceAndTest,
         ),
         (
             "slo_comments",
             "Comments",
-            COMMENTS_WRITTEN_SLO.as_str(),
+            prompts.comments_written_slo(),
             SLOFileType::SourceAndTest,
         ),
         (
             "slo_error_handling",
             "Error Handling",
-            ERROR_HANDLING_SLO.as_str(),
+            prompts.error_handling_slo(),
             SLOFileType::SourceAndTest,
         ),
-        ("slo_logic", "Logic", LOGIC_SLO.as_str(), SLOFileType::SourceAndTest),
+        ("slo_logic", "Logic", prompts.logic_slo(), SLOFileType::SourceAndTest),
         (
             "slo_naming_conventions",
             "Naming Conventions",
-            NAMING_CONVENTIONS_SLO.as_str(),
+            prompts.naming_conventions_slo(),
             SLOFileType::SourceAndTest,
         ),
         (
             "slo_oop_programming",
             "Object Oriented Programming",
-            OBJECT_ORIENTED_PROGRAMMING_SLO.as_str(),
+            prompts.object_oriented_programming_slo(),
             SLOFileType::SourceAndTest,
         ),
-        ("slo_syntax", "Syntax", SYNTAX_SLO.as_str(), SLOFileType::SourceAndTest),
-        ("slo_testing", "Testing", TESTING_SLO.as_str(), SLOFileType::Test),
+        ("slo_syntax", "Syntax", prompts.syntax_slo(), SLOFileType::SourceAndTest),
+        ("slo_testing", "Testing", prompts.testing_slo(), SLOFileType::Test),
     ];
 
     let mut slo_requests = Vec::new();
@@ -2111,7 +2125,7 @@ pub fn show_result(results: Array, gradescope_config: rhai::Map) -> Result<()> {
         }
 
         if grade > pass_threshold * out_of && !enabled_slos.is_empty() {
-            let runtime = RUNTIME.handle().clone();
+            let runtime = config::runtime();
 
             ensure!(
                 !project_title.is_empty(),
@@ -2282,6 +2296,7 @@ impl DiffGrader {
         );
 
         let file = self.project.identify(&self.file)?;
+        let prompt_set = config::prompts();
         let mut prompts = vec![];
 
         for (expected, input) in self.expected.iter().zip(self.input.iter()) {
@@ -2301,7 +2316,7 @@ impl DiffGrader {
                     Err(JavaFileError::AtRuntime { output, diags }) => {
                         let messages = vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?
@@ -2324,7 +2339,7 @@ impl DiffGrader {
                     Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
                         let messages = vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?
@@ -2350,7 +2365,7 @@ impl DiffGrader {
                     Err(e) => {
                         let messages = vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?
@@ -2452,7 +2467,7 @@ impl DiffGrader {
                 reason:      "See above.".to_string(),
                 prompt:      Some(vec![
                     ChatCompletionRequestSystemMessageArgs::default()
-                        .content(SYSTEM_MESSAGE.to_string())
+                        .content(config::prompts().system_message().to_string())
                         .name("Instructor".to_string())
                         .build()
                         .context("Failed to build system message")?
@@ -2488,7 +2503,8 @@ pub struct PromptRow {
 
 /// Generates feedback for a single `GradeResult` and posts it to the database.
 fn generate_single_feedback(result: &GradeResult) -> Result<String> {
-    let rt = RUNTIME.handle().clone();
+    let runtime = config::runtime();
+    let client = config::postgrest_client();
 
     if result.grade.grade < result.grade.out_of {
         let id = uuid::Uuid::new_v4().to_string();
@@ -2505,13 +2521,7 @@ fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         let messages = serde_json::to_string(&body)?;
 
         // Post to the database
-        rt.block_on(async {
-            POSTGREST_CLIENT
-                .from("prompts")
-                .insert(messages)
-                .execute()
-                .await
-        })?;
+        runtime.block_on(async { client.from("prompts").insert(messages).execute().await })?;
 
         // Return feedback URL
         Ok(format!(
@@ -3064,6 +3074,7 @@ impl QueryGrader {
             self.reason.to_string()
         };
 
+        let prompt_set = config::prompts();
         let result: Vec<String> = match self.run_query() {
             Ok(r) => {
                 let r: Array = r.cast();
@@ -3079,7 +3090,7 @@ impl QueryGrader {
                     reason,
                     prompt: Some(vec![
                         ChatCompletionRequestSystemMessageArgs::default()
-                            .content(SYSTEM_MESSAGE.to_string())
+                            .content(prompt_set.system_message().to_string())
                             .name("Instructor".to_string())
                             .build()
                             .context("Failed to build system message")?
@@ -3111,7 +3122,7 @@ impl QueryGrader {
                         reason,
                         prompt: Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?
@@ -3157,7 +3168,7 @@ impl QueryGrader {
                         reason,
                         prompt: Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?
@@ -3193,7 +3204,7 @@ impl QueryGrader {
                         reason,
                         prompt: Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
-                                .content(SYSTEM_MESSAGE.to_string())
+                                .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
                                 .build()
                                 .context("Failed to build system message")?

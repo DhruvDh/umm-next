@@ -1,13 +1,15 @@
 // TODO: make recommendations for the above
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use futures::{future::try_join_all, stream::FuturesUnordered};
 use tokio::{fs::OpenOptions, task::JoinError};
 use walkdir::WalkDir;
 
 use crate::{
-    constants::{BUILD_DIR, LIB_DIR, ROOT_DIR, RUNTIME, SOURCE_DIR, TEST_DIR},
-    java::{FileType, Project},
+    config,
+    java::{FileType, Project, ProjectPaths},
 };
 
 impl Project {
@@ -15,12 +17,16 @@ impl Project {
     pub fn check_health(&self) -> Result<()> {
         tracing::info!("Checking Project Health...");
         let project = Project::new()?;
+        let paths = Arc::new(ProjectPaths::default());
 
-        let rt = RUNTIME.handle().clone();
+        let runtime = config::runtime();
+        let rt = runtime.handle().clone();
         let _guard = rt.enter();
 
-        let handle1 = rt.spawn(async {
-            let files = WalkDir::new(ROOT_DIR.as_path())
+        let paths_for_walk = paths.clone();
+        let handle1 = rt.spawn(async move {
+            let root_dir = paths_for_walk.root_dir().to_path_buf();
+            let files = WalkDir::new(root_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_file())
@@ -72,12 +78,14 @@ impl Project {
             try_join_all(files).await
         });
 
+        let paths_for_packages = paths.clone();
         let handle2 = rt.spawn(async move {
             let files = project
                 .files()
                 .iter()
                 .map(|file| {
                     let file = file.clone();
+                    let paths_for_packages = paths_for_packages.clone();
                     tokio::spawn(async move {
                         if file.package_name().is_none() {
                             tracing::warn!(
@@ -86,18 +94,29 @@ impl Project {
                             );
                         } else {
                             let expected_path = if let FileType::Test = file.kind() {
-                                TEST_DIR.join(file.package_name().unwrap())
+                                paths_for_packages
+                                    .test_dir()
+                                    .join(file.package_name().unwrap())
                             } else {
-                                SOURCE_DIR.join(file.package_name().unwrap())
+                                paths_for_packages
+                                    .source_dir()
+                                    .join(file.package_name().unwrap())
                             };
-                            if file.path().parent().unwrap_or(&ROOT_DIR) != expected_path.as_path()
+                            if file
+                                .path()
+                                .parent()
+                                .unwrap_or(paths_for_packages.root_dir())
+                                != expected_path.as_path()
                             {
                                 tracing::warn!(
                                     "File {}\n\tis in the wrong directory.\n\t\tExpected: \
                                      {}\n\t\tFound: {}",
                                     file.path().display(),
                                     expected_path.display(),
-                                    file.path().parent().unwrap_or(&ROOT_DIR).to_string_lossy()
+                                    file.path()
+                                        .parent()
+                                        .unwrap_or(paths_for_packages.root_dir())
+                                        .to_string_lossy()
                                 );
                             }
                         }
@@ -107,26 +126,26 @@ impl Project {
             try_join_all(files).await
         });
 
-        rt.block_on(async {
-            if BUILD_DIR.join(".vscode").exists() {
-                tokio::fs::remove_dir_all(BUILD_DIR.join(".vscode").as_path())
+        let paths_for_cleanup = paths.clone();
+        rt.block_on(async move {
+            let build_dir = paths_for_cleanup.build_dir().to_path_buf();
+            if build_dir.join(".vscode").exists() {
+                tokio::fs::remove_dir_all(build_dir.join(".vscode").as_path())
                     .await
                     .with_context(|| {
-                        format!("Could not delete {}", BUILD_DIR.join(".vscode").display())
+                        format!("Could not delete {}", build_dir.join(".vscode").display())
                     })
                     .unwrap();
             }
 
-            if BUILD_DIR.join(LIB_DIR.display().to_string()).exists() {
-                tokio::fs::remove_dir_all(BUILD_DIR.join(LIB_DIR.display().to_string()).as_path())
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Could not delete {}",
-                            BUILD_DIR.join(LIB_DIR.display().to_string()).display()
-                        )
-                    })
-                    .unwrap();
+            if let Some(lib_folder_name) = paths_for_cleanup.lib_dir().file_name() {
+                let build_lib_dir = build_dir.join(lib_folder_name);
+                if build_lib_dir.exists() {
+                    tokio::fs::remove_dir_all(build_lib_dir.as_path())
+                        .await
+                        .with_context(|| format!("Could not delete {}", build_lib_dir.display()))
+                        .unwrap();
+                }
             }
             let handles = FuturesUnordered::from_iter(vec![handle1, handle2]);
             try_join_all(handles).await

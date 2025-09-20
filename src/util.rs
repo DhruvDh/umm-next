@@ -12,7 +12,7 @@ use glob::glob;
 use tokio::io::AsyncWriteExt;
 use which::which;
 
-use crate::constants::*;
+use crate::{constants::USE_ACTIVE_RETRIEVAL, java::ProjectPaths};
 
 /// Finds and returns the path to javac binary
 pub fn javac_path() -> Result<OsString> {
@@ -43,59 +43,59 @@ pub fn umm_path() -> String {
 /// * `search_depth`: how many folders deep to search for
 /// * `root_dir`: the root directory where search starts
 pub fn find_files(extension: &str, search_depth: i8, root_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut root_dir = PathBuf::from(root_dir);
+    let mut pattern = root_dir.to_path_buf();
 
     for _ in 0..search_depth {
-        root_dir.push("**");
+        pattern.push("**");
     }
 
-    root_dir.push(format!("*.{extension}"));
-    let root_dir = root_dir
+    pattern.push(format!("*.{extension}"));
+    let pattern = pattern
         .to_str()
-        .context("Could not convert root_dir to string")?;
+        .context("Could not convert root_dir to string")?
+        .to_string();
 
-    Ok(glob(root_dir)
+    Ok(glob(&pattern)
         .context("Could not create glob")?
         .filter_map(Result::ok)
-        .map(|path| ROOT_DIR.join(path))
         .collect())
 }
 
 /// Find class, jar files in library path and build directory to populate
 /// classpath and return it
-pub fn classpath() -> Result<String> {
-    let mut path: Vec<String> = vec![
-        LIB_DIR.display().to_string(),
-        BUILD_DIR.display().to_string(),
+pub fn classpath(paths: &ProjectPaths) -> Result<String> {
+    let mut entries: Vec<String> = vec![
+        paths.lib_dir().display().to_string(),
+        paths.build_dir().display().to_string(),
     ];
 
-    path.append(
-        &mut find_files("jar", 4, &ROOT_DIR)?
+    entries.append(
+        &mut find_files("jar", 4, paths.root_dir())?
             .iter()
             .map(|p| p.as_path().display().to_string())
             .collect(),
     );
 
-    Ok(path.join(&SEPARATOR))
+    Ok(entries.join(paths.separator()))
 }
 
 /// Find java files in source path and root directory to populate
 /// sourcepath and return it
-pub fn sourcepath() -> Result<String> {
-    let mut path: Vec<String> = vec![
-        SOURCE_DIR.join("").display().to_string(),
-        TEST_DIR.join("").display().to_string(),
-        ROOT_DIR.join("").display().to_string(),
+pub fn sourcepath(paths: &ProjectPaths) -> Result<String> {
+    let mut entries: Vec<String> = vec![
+        paths.source_dir().display().to_string(),
+        paths.test_dir().display().to_string(),
+        paths.root_dir().display().to_string(),
     ];
 
-    path.append(
-        &mut find_files("java", 4, &ROOT_DIR)?
+    entries.append(
+        &mut find_files("java", 4, paths.root_dir())?
             .iter()
             .map(|p| p.as_path().display().to_string())
             .collect(),
     );
 
-    Ok(path.join(&SEPARATOR))
+    Ok(entries.join(paths.separator()))
 }
 
 /// TODO: Add docs

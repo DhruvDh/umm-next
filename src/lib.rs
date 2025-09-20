@@ -9,6 +9,8 @@
 #![feature(stmt_expr_attributes)]
 #![feature(iter_collect_into)]
 
+/// Shared, runtime-initialized configuration (prompts, services, env)
+pub mod config;
 /// A module defining a bunch of constant values to be used throughout
 pub mod constants;
 /// For all things related to grading
@@ -23,7 +25,7 @@ pub mod parsers;
 /// Utility functions for convenience
 pub mod util;
 use anyhow::{Context, Result};
-use constants::{BUILD_DIR, LIB_DIR, ROOT_DIR};
+use java::ProjectPaths;
 use rhai::Engine;
 
 /// Defined for convenience
@@ -44,23 +46,28 @@ pub fn grade(_name_or_path: &str) -> Result<()> {
 
 /// Deletes all java compiler artefacts
 pub fn clean() -> Result<()> {
-    if BUILD_DIR.as_path().exists() {
-        std::fs::remove_dir_all(BUILD_DIR.as_path())
-            .with_context(|| format!("Could not delete {}", BUILD_DIR.display()))?;
+    let paths = ProjectPaths::default();
+    let build_dir = paths.build_dir();
+    let lib_dir = paths.lib_dir();
+    let root_dir = paths.root_dir();
+
+    if build_dir.exists() {
+        std::fs::remove_dir_all(build_dir)
+            .with_context(|| format!("Could not delete {}", build_dir.display()))?;
     }
-    if LIB_DIR.as_path().exists() {
-        std::fs::remove_dir_all(LIB_DIR.as_path())
-            .with_context(|| format!("Could not delete {}", LIB_DIR.display()))?;
+    if lib_dir.exists() {
+        std::fs::remove_dir_all(lib_dir)
+            .with_context(|| format!("Could not delete {}", lib_dir.display()))?;
     }
-    if ROOT_DIR.join(".vscode/settings.json").as_path().exists() {
-        std::fs::remove_file(ROOT_DIR.join(".vscode/settings.json").as_path()).with_context(
-            || format!("Could not delete {}", ROOT_DIR.join(".vscode/settings.json").display()),
-        )?;
+    let vscode_settings = root_dir.join(".vscode/settings.json");
+    if vscode_settings.exists() {
+        std::fs::remove_file(&vscode_settings)
+            .with_context(|| format!("Could not delete {}", vscode_settings.display()))?;
     }
-    if ROOT_DIR.join(".vscode/tasks.json").as_path().exists() {
-        std::fs::remove_file(ROOT_DIR.join(".vscode/tasks.json").as_path()).with_context(|| {
-            format!("Could not delete {}", ROOT_DIR.join(".vscode/tasks.json").display())
-        })?;
+    let vscode_tasks = root_dir.join(".vscode/tasks.json");
+    if vscode_tasks.exists() {
+        std::fs::remove_file(&vscode_tasks)
+            .with_context(|| format!("Could not delete {}", vscode_tasks.display()))?;
     }
 
     Ok(())
