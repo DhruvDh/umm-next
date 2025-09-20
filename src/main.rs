@@ -285,7 +285,7 @@ fn main() -> Result<()> {
             };
 
             let mut zip = zip::ZipWriter::new(zip_file);
-            let options = zip::write::FileOptions::default()
+            let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .unix_permissions(0o755);
             let mut buffer = Vec::new();

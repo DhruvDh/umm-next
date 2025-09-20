@@ -30,8 +30,9 @@ use serde::{Deserialize, Serialize};
 use similar::{Algorithm, ChangeTag, utils::diff_unicode_words};
 use snailquote::unescape;
 use tabled::{
-    Alignment, Modify, Panel, TableIteratorExt, Tabled, Width, display::ExpandedDisplay,
-    object::Rows,
+    Table, Tabled,
+    settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
+    tables::ExtendedTable,
 };
 use typed_builder::TypedBuilder;
 use umm_derive::generate_rhai_variant;
@@ -767,11 +768,10 @@ impl DocsGrader {
         let num_diags = diags.len();
         eprintln!(
             "{}",
-            diags
-                .table()
+            Table::new(&diags)
                 .with(Panel::header(format!("Check javadoc for {}", files.join(", "))))
                 .with(Panel::footer(format!("-{penalty} due to {num_diags} nits")))
-                .with(Modify::new(Rows::new(1..)).with(Width::wrap(24).keep_words()))
+                .with(Modify::new(Rows::new(1..)).with(Width::wrap(24).keep_words(true)))
                 .with(
                     Modify::new(Rows::first())
                         .with(Alignment::center())
@@ -782,7 +782,7 @@ impl DocsGrader {
                         .with(Alignment::center())
                         .with(Alignment::center_vertical()),
                 )
-                .with(tabled::Style::modern())
+                .with(Style::modern())
         );
 
         let prompt = if num_diags > 0 {
@@ -1313,7 +1313,7 @@ impl UnitTestGrader {
             let prompt = if num_diags > 0 {
                 let context = get_source_context(diags.clone(), project, 3, 6, 6, false, None)?;
 
-                let mut feedback = ExpandedDisplay::new(diags).to_string();
+                let mut feedback = ExtendedTable::new(diags).to_string();
                 eprintln!("{feedback}");
 
                 if feedback.len() > PROMPT_TRUNCATE {
@@ -1941,6 +1941,7 @@ async fn generate_slo_responses(
     Ok(slo_responses)
 }
 
+/// Convert an optional environment string into a `ChatReasoningEffort`, falling back to `Medium`.
 fn parse_reasoning_effort(val: Option<String>) -> ChatReasoningEffort {
     match val
         .map(|s| s.to_ascii_lowercase())
@@ -2068,12 +2069,10 @@ pub fn show_result(results: Array, gradescope_config: rhai::Map) -> Result<()> {
     if show_table {
         eprintln!(
             "{}",
-            results
-                .clone()
-                .table()
+            Table::new(&results)
                 .with(Panel::header("Grading Overview"))
                 .with(Panel::footer(format!("Total: {grade:.2}/{out_of:.2}")))
-                .with(Modify::new(Rows::new(1..)).with(Width::wrap(24).keep_words()))
+                .with(Modify::new(Rows::new(1..)).with(Width::wrap(24).keep_words(true)))
                 .with(
                     Modify::new(Rows::first())
                         .with(Alignment::center())
@@ -2084,7 +2083,7 @@ pub fn show_result(results: Array, gradescope_config: rhai::Map) -> Result<()> {
                         .with(Alignment::center())
                         .with(Alignment::center_vertical()),
                 )
-                .with(tabled::Style::modern())
+                .with(Style::modern())
         );
     }
 

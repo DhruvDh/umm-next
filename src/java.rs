@@ -21,7 +21,7 @@ use rhai::{CustomType, EvalAltResult};
 use serde::{Deserialize, Serialize};
 use snailquote::unescape;
 use tokio::io::AsyncWriteExt;
-use tree_sitter::{Query, QueryCursor, Tree};
+use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 use umm_derive::generate_rhai_variant;
 
 use crate::{
@@ -117,19 +117,23 @@ pub struct Parser {
     lang:  tree_sitter::Language,
 }
 
+fn java_language() -> tree_sitter::Language {
+    tree_sitter_java::LANGUAGE.into()
+}
+
 impl Default for Parser {
     fn default() -> Self {
         let mut parser = tree_sitter::Parser::new();
-        let code = String::new();
+        let language = java_language();
         parser
-            .set_language(&tree_sitter_java::language())
+            .set_language(&language)
             .expect("Error loading Java grammar");
-        let tree = parser.parse(code, None);
+        let tree = parser.parse("", None);
 
         Self {
             code:  String::new(),
             _tree: tree,
-            lang:  tree_sitter_java::language(),
+            lang:  language,
         }
     }
 }
@@ -148,18 +152,19 @@ impl Parser {
     /// * `lang`: the tree-sitter grammar to use
     pub fn new(source_code: String) -> Result<Self> {
         let mut parser = tree_sitter::Parser::new();
+        let language = java_language();
 
         parser
-            .set_language(&tree_sitter_java::language())
+            .set_language(&language)
             .expect("Error loading Java grammar");
         let tree = parser
-            .parse(source_code.clone(), None)
+            .parse(source_code.as_str(), None)
             .context("Error parsing Java code")?;
 
         Ok(Self {
             code:  source_code,
             _tree: Some(tree),
-            lang:  tree_sitter_java::language(),
+            lang:  language,
         })
     }
 
@@ -187,10 +192,10 @@ impl Parser {
 
         let query = Query::new(&self.lang, q).unwrap();
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&query, tree.root_node(), self.code.as_bytes());
+        let mut matches = cursor.matches(&query, tree.root_node(), self.code.as_bytes());
         let capture_names = query.capture_names();
 
-        for m in matches {
+        while let Some(m) = matches.next() {
             let mut result = Dict::new();
 
             for name in capture_names {
