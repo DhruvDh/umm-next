@@ -22,9 +22,6 @@ pub mod java;
 pub mod parsers;
 /// Utility functions for convenience
 pub mod util;
-/// For structs and enums related to VSCode Tasks
-pub mod vscode;
-
 use anyhow::{Context, Result};
 use constants::{BUILD_DIR, LIB_DIR, ROOT_DIR};
 use rhai::Engine;
