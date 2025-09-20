@@ -1,7 +1,0 @@
-release/
-.future-incompat-report.json
-.rustc_info.json
-.rustdoc_fingerprint.json
-
-slides/.DS_Store
-slides/.obsidian

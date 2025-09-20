@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["classpath","download","download_to_json","download_to_string","find_files","java_path","javac_path","sourcepath","umm_path","use_active_retrieval","use_heuristic_retrieval"]};
