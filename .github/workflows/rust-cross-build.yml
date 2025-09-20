@@ -90,10 +90,11 @@ jobs:
           cd -
 
       - name: Publish release artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: umm-${{ matrix.platform.os_name }}
+          name: umm-${{ matrix.platform.os_name }}-${{ matrix.toolchain }}
           path: "umm-*"
+          if-no-files-found: error
 
       - name: Generate SHA-256
         run: shasum -a 256 ${{ matrix.platform.name }}
