@@ -26,100 +26,25 @@ pub mod util;
 pub mod vscode;
 
 use anyhow::{Context, Result};
-use constants::{
-    BUILD_DIR, COURSE, LIB_DIR, POSTGREST_CLIENT, ROOT_DIR, RUNTIME, SCRIPT_AST, TERM,
-};
-use grade::*;
-use java::{File, FileType, Parser, Project};
-use rhai::{Engine, EvalAltResult};
-use umm_derive::generate_rhai_variant;
-use util::{use_active_retrieval, use_heuristic_retrieval};
+use constants::{BUILD_DIR, LIB_DIR, ROOT_DIR};
+use rhai::Engine;
 
 /// Defined for convenience
 type Dict = std::collections::HashMap<String, String>;
 
-/// Creates and returns a new `Engine` with all the types and functions
-/// registered
+/// Creates and returns a new bare `Engine` placeholder while Rhai support is
+/// being phased out.
 pub fn create_engine() -> Engine {
-    let mut engine = Engine::new();
-    engine
-        .register_type_with_name::<FileType>("JavaFileType")
-        .build_type::<DocsGrader>()
-        .build_type::<ByUnitTestGrader>()
-        .build_type::<UnitTestGrader>()
-        .build_type::<ByHiddenTestGrader>()
-        .build_type::<DiffGrader>()
-        .build_type::<Grade>()
-        .build_type::<GradeResult>()
-        .build_type::<Parser>()
-        .build_type::<File>()
-        .build_type::<Query>()
-        .build_type::<QueryGrader>()
-        .build_type::<Project>()
-        .register_fn("clean", clean_script)
-        .register_fn("show_results", show_result_script)
-        .register_fn("generate_single_feedback", generate_single_feedback_script)
-        .register_fn("generate_feedback", generate_feedback_script)
-        .register_fn("use_active_retrieval", use_active_retrieval)
-        .register_fn("use_heuristic_retrieval", use_heuristic_retrieval);
-    engine
+    Engine::new()
 }
 
 /// Prints the result of grading
-pub fn grade(name_or_path: &str) -> Result<()> {
-    let engine = create_engine();
-
-    // println!("{}", engine.gen_fn_signatures(false).join("\n"));
-    let script = match std::fs::read_to_string(name_or_path) {
-        Ok(s) => s,
-        Err(_) => {
-            let assignment_name = name_or_path.to_string().replace(['\"', '\\'], "");
-            let rt = RUNTIME.handle().clone();
-
-            let resp = rt.block_on(async {
-                POSTGREST_CLIENT
-                    .from("grading_scripts")
-                    .eq("course", COURSE)
-                    .eq("term", TERM)
-                    .eq("assignment", &assignment_name)
-                    .select("url")
-                    .single()
-                    .execute()
-                    .await?
-                    .text()
-                    .await
-                    .context(format!("Could not get grading script for {assignment_name}"))
-            });
-
-            let resp: serde_json::Value = serde_json::from_str(resp?.as_str())?;
-            let resp = resp.as_object().unwrap();
-
-            if let Some(message) = resp.get("message") {
-                anyhow::bail!("Error for {assignment_name}: {message}");
-            }
-
-            let script_url = resp.get("url").unwrap().as_str().unwrap();
-
-            reqwest::blocking::get(script_url)
-                .context(format!("Cannot get url: {script_url}"))?
-                .text()
-                .context(format!("Could not parse the response from {script_url} to text."))?
-        }
-    };
-    let compiled_ast = engine.compile(script)?;
-    {
-        let ast_cell = std::sync::Arc::clone(&SCRIPT_AST);
-        let mut ast_lock = ast_cell.lock().unwrap();
-        *ast_lock = compiled_ast.clone();
-    }
-
-    // Run the script
-    engine.run_ast(&compiled_ast)?;
-
-    Ok(())
+pub fn grade(_name_or_path: &str) -> Result<()> {
+    anyhow::bail!(
+        "The grade command is temporarily unavailable while Rhai support is being removed."
+    )
 }
 
-#[generate_rhai_variant(Fallible)]
 /// Deletes all java compiler artefacts
 pub fn clean() -> Result<()> {
     if BUILD_DIR.as_path().exists() {

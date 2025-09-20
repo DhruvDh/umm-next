@@ -212,40 +212,34 @@ fn main() -> Result<()> {
     // TODO: move this to a separate method and call that method in shell()
     match cmd {
         Cmd::Run(f) => {
-            match Project::new()?.identify(f.as_str())?.run_mut_script(None) {
-                Ok(out) => {
-                    println!("{out}");
-                }
-                Err(e) => {
-                    eprintln!("{:#?}", e);
-                }
-            };
+            let file = Project::new()?.identify(f.as_str())?;
+            match file.run(None) {
+                Ok(out) => println!("{out}"),
+                Err(e) => eprintln!("{:#?}", e),
+            }
         }
-        Cmd::Check(f) => match Project::new()?.identify(f.as_str())?.check_mut_script() {
-            Ok(out) => {
-                println!("{out}");
+        Cmd::Check(f) => {
+            let file = Project::new()?.identify(f.as_str())?;
+            match file.check() {
+                Ok(out) => println!("{out}"),
+                Err(e) => eprintln!("{:#?}", e),
             }
-            Err(e) => {
-                eprintln!("{:#?}", e);
-            }
-        },
+        }
         Cmd::Test(f, t) => {
+            let project = Project::new()?;
+            let file = project.identify(f.as_str())?;
             let out = if t.is_empty() {
-                Project::new()?
-                    .identify(f.as_str())?
-                    .test_mut_script(vec![])?
+                file.test(Vec::<&str>::new(), Some(&project))?
             } else {
-                Project::new()?
-                    .identify(f.as_str())?
-                    .test_mut_script(t.iter().map(|i| i.as_str()).collect())?
+                let test_refs: Vec<&str> = t.iter().map(String::as_str).collect();
+                file.test(test_refs, Some(&project))?
             };
 
             println!("{out}");
         }
         Cmd::DocCheck(f) => {
-            let out = Project::new()?
-                .identify(f.as_str())?
-                .doc_check_mut_script()?;
+            let file = Project::new()?.identify(f.as_str())?;
+            let out = file.doc_check()?;
             println!("{out}");
         }
         Cmd::Grade(g) => grade(&g)?,

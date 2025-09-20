@@ -14,15 +14,10 @@ use futures::{
     future::{join_all, try_join_all},
     stream::FuturesUnordered,
 };
-use rhai::Array;
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-use rhai::{CustomType, EvalAltResult};
 use serde::{Deserialize, Serialize};
 use snailquote::unescape;
 use tokio::io::AsyncWriteExt;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
-use umm_derive::generate_rhai_variant;
 
 use crate::{
     Dict,
@@ -145,7 +140,6 @@ impl std::fmt::Debug for Parser {
 }
 
 impl Parser {
-    #[generate_rhai_variant(Impl, Fallible)]
     /// Returns a new parser object
     ///
     /// * `source_code`: the source code to be parsed
@@ -178,7 +172,6 @@ impl Parser {
         self.code = code;
     }
 
-    #[generate_rhai_variant(Fallible, Mut)]
     /// Applies a tree sitter query and returns the result as a collection of
     /// HashMaps
     ///
@@ -234,19 +227,6 @@ impl Parser {
     }
 }
 
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-impl CustomType for Parser {
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("JavaParser")
-            .with_fn("new_java_parser", Parser::new_script)
-            .with_fn("code", Parser::code)
-            .with_fn("set_code", Parser::set_code)
-            .with_fn("query", Parser::query_mut_script);
-    }
-}
-
 /// An enum to represent possible errors with a Java file
 #[derive(thiserror::Error, Debug)]
 pub enum JavaFileError {
@@ -284,7 +264,6 @@ pub enum JavaFileError {
 }
 
 impl File {
-    #[generate_rhai_variant(Impl, Fallible)]
     /// Creates a new `File` from `path`
     ///
     /// * `path`: the path to read and try to create a File instance for.
@@ -573,42 +552,6 @@ impl File {
         Ok(output)
     }
 
-    /// Utility method to ask javac for documentation lints using the -Xdoclint
-    /// flag.
-    ///
-    /// The method simply returns the output produced by javac as a String.
-    /// There is a ['parse_diag method'][fn@crate::parsers::parser::parse_diag]
-    /// that can parse these to yield useful information.
-    pub fn doc_check_mut_script(&self) -> Result<String, Box<EvalAltResult>> {
-        match self.inner_doc_check(Stdio::inherit(), Stdio::inherit(), Stdio::inherit()) {
-            Ok(child) => match unescape(
-                &[
-                    match String::from_utf8(child.stderr) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                    match String::from_utf8(child.stdout) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                ]
-                .concat(),
-            ) {
-                Ok(s) => Ok(s),
-                Err(e) => Err(format!("{}", e).into()),
-            },
-            Err(e) => Err(Box::new(
-                unescape(e.to_string().as_str())
-                    .unwrap_or_else(|_| format!("Could not unescape: {:?}", e))
-                    .into(),
-            )),
-        }
-    }
-
     /// Returns the inner check of this [`File`].
     fn inner_check(&self, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
         let path = self.path.display().to_string();
@@ -664,37 +607,6 @@ impl File {
                 }
             }
             Err(e) => Err(JavaFileError::Unknown(e)),
-        }
-    }
-
-    /// Utility method to check for syntax errors using javac flag.
-    pub fn check_mut_script(&self) -> Result<String, Box<EvalAltResult>> {
-        match self.inner_check(Stdio::inherit(), Stdio::inherit(), Stdio::inherit()) {
-            Ok(child) => match unescape(
-                &[
-                    match String::from_utf8(child.stderr) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                    match String::from_utf8(child.stdout) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                ]
-                .concat(),
-            ) {
-                Ok(s) => Ok(s),
-                Err(e) => Err(format!("{}", e).into()),
-            },
-            Err(e) => Err(Box::new(
-                unescape(e.to_string().as_str())
-                    .unwrap_or_else(|_| format!("Could not unescape: {:?}", e))
-                    .into(),
-            )),
         }
     }
 
@@ -780,37 +692,6 @@ impl File {
                 }
             }
             Err(e) => Err(anyhow!(e).into()),
-        }
-    }
-
-    /// Utility method to run a java file that has a main method.
-    pub fn run_mut_script(&self, input: Option<String>) -> Result<String, Box<EvalAltResult>> {
-        match self.inner_run(input, Stdio::inherit(), Stdio::inherit()) {
-            Ok(child) => match unescape(
-                &[
-                    match String::from_utf8(child.stderr) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                    match String::from_utf8(child.stdout) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                ]
-                .concat(),
-            ) {
-                Ok(s) => Ok(s),
-                Err(e) => Err(format!("{}", e).into()),
-            },
-            Err(e) => Err(Box::new(
-                unescape(e.to_string().as_str())
-                    .unwrap_or_else(|_| format!("Could not unescape: {:?}", e))
-                    .into(),
-            )),
         }
     }
 
@@ -941,39 +822,6 @@ impl File {
     /// A utility method that takes a list of strings (or types that implement
     /// `Into<String>`) meant to represent test method names, and runs those
     /// tests.
-    pub fn test_mut_script(&mut self, tests: Vec<&str>) -> Result<String, Box<EvalAltResult>> {
-        match self.inner_test(tests, Stdio::inherit(), Stdio::inherit(), Stdio::inherit()) {
-            Ok(child) => match unescape(
-                &[
-                    match String::from_utf8(child.stderr) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                    match String::from_utf8(child.stdout) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("{}", e).into());
-                        }
-                    },
-                ]
-                .concat(),
-            ) {
-                Ok(s) => Ok(s),
-                Err(e) => Err(format!("{}", e).into()),
-            },
-            Err(e) => Err(Box::new(
-                unescape(e.to_string().as_str())
-                    .unwrap_or_else(|_| format!("Could not unescape: {:?}", e))
-                    .into(),
-            )),
-        }
-    }
-
-    /// A utility method that takes a list of strings (or types that implement
-    /// `Into<String>`) meant to represent test method names, and runs those
-    /// tests.
     ///
     /// Returns the output from JUnit as a string. There are parsers in
     /// ['parsers module'][crate::parsers::parser] that helps parse this output.
@@ -992,38 +840,14 @@ impl File {
         self.test_methods.clone()
     }
 
-    /// Get a reference to the file's test methods.
-    pub fn test_methods_mut_script(&mut self) -> Array {
-        self.test_methods().iter().map(|s| s.into()).collect()
-    }
-
     /// treesitter query for this file
     pub fn query(&self, q: &str) -> Result<Vec<Dict>> {
         self.parser.query(q)
     }
 
-    /// treesitter query for this file
-    pub fn query_mut_script(&mut self, q: &str) -> Result<Array, Box<EvalAltResult>> {
-        match self.parser.query(q) {
-            Ok(v) => {
-                let mut arr = Array::new();
-                for d in v {
-                    arr.push(d.into());
-                }
-                Ok(arr)
-            }
-            Err(e) => Err(format!("Failed to query file: {e}").into()),
-        }
-    }
-
     /// Get a reference to the file's path.
     pub fn path(&self) -> &PathBuf {
         &self.path
-    }
-
-    /// Get a reference to the file's path.
-    pub fn path_mut_script(&mut self) -> String {
-        self.path.display().to_string()
     }
 
     /// Get a reference to the file's proper name.
@@ -1047,29 +871,7 @@ impl File {
     }
 }
 
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-impl CustomType for File {
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("JavaFile")
-            .with_fn("new_java_file", File::new_script)
-            .with_fn("check", File::check_mut_script)
-            .with_fn("doc_check", File::doc_check_mut_script)
-            .with_fn("run", File::run_mut_script)
-            .with_fn("test", File::test_mut_script)
-            .with_fn("kind", File::kind)
-            .with_fn("file_name", File::file_name)
-            .with_fn("test_methods", File::test_methods_mut_script)
-            .with_fn("query", File::query_mut_script)
-            .with_fn("package_name", File::package_name)
-            .with_fn("path", File::path_mut_script)
-            .with_fn("parser", File::parser);
-    }
-}
-
 impl Project {
-    #[generate_rhai_variant(Impl, Fallible)]
     /// Initializes a Project, by discovering java files in the
     /// [struct@UMM_DIR] directory. Also downloads some `jar`
     /// files required for unit testing and mutation testing.
@@ -1135,7 +937,6 @@ impl Project {
         Ok(proj)
     }
 
-    #[generate_rhai_variant(Impl, Mut, Fallible)]
     /// Attempts to identify the correct file from the project from a partial or
     /// fully formed name as expected by a java compiler.
     ///
@@ -1344,7 +1145,6 @@ impl Project {
         self.files.as_ref()
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Prints project struct as a json
     pub fn info(&self) -> Result<()> {
         println!("{}", serde_json::to_string(&self)?);
@@ -1738,17 +1538,4 @@ pub struct SubmissionRow {
     term:    String,
     /// Content of the submission
     content: String,
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-impl CustomType for Project {
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("JavaProject")
-            .with_fn("new_java_project", Project::new_script)
-            .with_fn("identify", Project::identify_mut_script)
-            .with_fn("files", Project::files)
-            .with_fn("info", Project::info_script);
-    }
 }

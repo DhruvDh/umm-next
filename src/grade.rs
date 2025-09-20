@@ -25,7 +25,7 @@ use colored::Colorize;
 use itertools::Itertools;
 use rhai::FnPtr;
 #[allow(deprecated)]
-use rhai::{Array, CustomType, Dynamic, EvalAltResult};
+use rhai::{Array, Dynamic};
 use serde::{Deserialize, Serialize};
 use similar::{Algorithm, ChangeTag, utils::diff_unicode_words};
 use snailquote::unescape;
@@ -35,7 +35,6 @@ use tabled::{
     tables::ExtendedTable,
 };
 use typed_builder::TypedBuilder;
-use umm_derive::generate_rhai_variant;
 
 use crate::{
     Dict,
@@ -83,7 +82,6 @@ impl Grade {
         Self { grade, out_of }
     }
 
-    #[generate_rhai_variant(Impl, Fallible)]
     /// Creates a new grade from a string -
     /// * `grade_string` - A string in the format `grade/out_of`, eg. `10/20`
     pub fn grade_from_string(grade_string: String) -> Result<Grade> {
@@ -681,7 +679,6 @@ impl DocsGrader {
 
     /// Grades documentation by using the -Xdoclint javac flag.
     /// Scans javac output for generated warnings and grades accordingly.
-    #[generate_rhai_variant(Fallible)]
     pub fn grade_docs(self) -> Result<GradeResult> {
         let mut diags = vec![];
         let mut all_diags = vec![];
@@ -903,7 +900,6 @@ impl ByUnitTestGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Grades by running tests, and reports how many tests pass.
     /// Final grade is the same percentage of maximum grade as the number of
     /// tests passing.
@@ -1197,7 +1193,6 @@ impl UnitTestGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
     pub fn grade_unit_tests(&mut self) -> Result<GradeResult> {
         let req_name = self.get_req_name();
@@ -1467,7 +1462,6 @@ impl ByHiddenTestGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Grades using hidden tests. Test file is downloaded, ran, and then
     /// cleaned up before returning.
     pub fn grade_by_hidden_tests(&mut self) -> Result<GradeResult> {
@@ -1941,7 +1935,8 @@ async fn generate_slo_responses(
     Ok(slo_responses)
 }
 
-/// Convert an optional environment string into a `ChatReasoningEffort`, falling back to `Medium`.
+/// Convert an optional environment string into a `ChatReasoningEffort`, falling
+/// back to `Medium`.
 fn parse_reasoning_effort(val: Option<String>) -> ChatReasoningEffort {
     match val
         .map(|s| s.to_ascii_lowercase())
@@ -1954,7 +1949,6 @@ fn parse_reasoning_effort(val: Option<String>) -> ChatReasoningEffort {
     }
 }
 
-#[generate_rhai_variant(Fallible)]
 /// Print grade result
 ///
 /// * `results`: array of GradeResults to print in a table.
@@ -2276,7 +2270,6 @@ impl DiffGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Grades by diffing the `expected` and `actual` strings.
     pub fn grade_by_diff(&mut self) -> Result<GradeResult> {
         ensure!(
@@ -2493,7 +2486,6 @@ pub struct PromptRow {
     status:           String,
 }
 
-#[generate_rhai_variant(Fallible)]
 /// Generates feedback for a single `GradeResult` and posts it to the database.
 fn generate_single_feedback(result: &GradeResult) -> Result<String> {
     let rt = RUNTIME.handle().clone();
@@ -2535,7 +2527,6 @@ fn generate_single_feedback(result: &GradeResult) -> Result<String> {
     }
 }
 
-#[generate_rhai_variant(Fallible)]
 /// Generates a FEEDBACK file after prompting ChatGPT for feedback on an array
 /// of results.
 pub fn generate_feedback(results: Array) -> Result<()> {
@@ -2772,7 +2763,6 @@ impl QueryGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Adds a query to run.
     /// If no file has been selected, this will throw an error.
     pub fn query(#[allow(unused_mut)] mut self, q: String) -> Result<Self, QueryError> {
@@ -2789,7 +2779,6 @@ impl QueryGrader {
         Ok(self)
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Adds a capture to the last query.
     /// If no queries have been added, this will throw an error.
     pub fn capture(#[allow(unused_mut)] mut self, c: String) -> Result<Self, QueryError> {
@@ -2801,7 +2790,6 @@ impl QueryGrader {
         }
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Adds a capture to the last query.
     /// If no queries have been added, this will throw an error.
     pub fn filter(#[allow(unused_mut)] mut self, f: FnPtr) -> Result<Self, QueryError> {
@@ -2953,7 +2941,6 @@ impl QueryGrader {
         self
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Runs the queries, and returns the result.
     /// TODO: Make it so that it doesn't parse a new piece of code, just filters
     /// out the irrelevant line ranges. This performs better but more
@@ -3056,7 +3043,6 @@ impl QueryGrader {
         Ok(matches.into())
     }
 
-    #[generate_rhai_variant(Fallible)]
     /// Grades the file according to the supplied queries, captures, and
     /// constraints.
     pub fn grade_by_query(self) -> Result<GradeResult> {
@@ -3223,221 +3209,5 @@ impl QueryGrader {
                 }
             }
         }
-    }
-}
-
-// Allowed because CustomType is volatile, not deprecated
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for Grade {
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("Grade")
-            .with_fn("grade", Self::grade)
-            .with_fn("grade", Self::set_grade)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("new_grade", Self::new)
-            .with_fn("from_string", Self::grade_from_string_script)
-            .with_fn("to_string", Self::to_string);
-    }
-}
-
-// Allowed because CustomType is volatile, not deprecated
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for GradeResult {
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("GradeResult")
-            .with_fn("requirement", Self::requirement)
-            .with_fn("requirement", Self::set_requirement)
-            .with_fn("grade", Self::grade)
-            .with_fn("grade", Self::set_grade)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("reason", Self::reason)
-            .with_fn("reason", Self::set_reason)
-            .with_fn("new_grade_result", Self::default);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai
-impl CustomType for DocsGrader {
-    /// Builds a custom type to be registered with Rhai
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("DocsGrader")
-            .with_fn("req_name", Self::req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("project", Self::project)
-            .with_fn("project", Self::set_project)
-            .with_fn("files", Self::files)
-            .with_fn("files", Self::set_files)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("penalty", Self::penalty)
-            .with_fn("penalty", Self::set_penalty)
-            .with_fn("new_docs_grader", Self::default)
-            .with_fn("run", Self::grade_docs_script);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai
-impl CustomType for ByUnitTestGrader {
-    /// Builds a custom type to be registered with Rhai
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("ByUnitTestGrader")
-            .with_fn("test_files", Self::test_files)
-            .with_fn("test_files", Self::set_test_files)
-            .with_fn("project", Self::project)
-            .with_fn("project", Self::set_project)
-            .with_fn("expected_tests", Self::expected_tests)
-            .with_fn("expected_tests", Self::set_expected_tests)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("req_name", Self::req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("new_by_unit_test_grader", Self::default)
-            .with_fn("run", Self::grade_by_tests_script);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai
-impl CustomType for UnitTestGrader {
-    /// Builds a custom type to be registered with Rhai
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("UnitTestGrader")
-            .with_fn("req_name", Self::get_req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("out_of", Self::get_out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("target_test", Self::get_target_test)
-            .with_fn("target_test", Self::set_target_test)
-            .with_fn("target_class", Self::get_target_class)
-            .with_fn("target_class", Self::set_target_class)
-            .with_fn("excluded_methods", Self::get_excluded_methods)
-            .with_fn("excluded_methods", Self::set_excluded_methods)
-            .with_fn("avoid_calls_to", Self::get_avoid_calls_to)
-            .with_fn("avoid_calls_to", Self::set_avoid_calls_to)
-            .with_fn("new_unit_test_grader", Self::default)
-            .with_fn("run", Self::grade_unit_tests_script);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for ByHiddenTestGrader {
-    /// Builds a custom type to be registered with Rhai.
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("ByHiddenTestGrader")
-            .with_fn("url", Self::url)
-            .with_fn("url", Self::set_url)
-            .with_fn("test_class_name", Self::test_class_name)
-            .with_fn("test_class_name", Self::set_test_class_name)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("req_name", Self::req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("new_by_hidden_test_grader", Self::default)
-            .with_fn("run", Self::grade_by_hidden_tests_script);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for DiffGrader {
-    /// Builds a custom type to be registered with Rhai.
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("DiffGrader")
-            .with_fn("req_name", Self::req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("expected", Self::expected)
-            .with_fn("expected", Self::set_expected)
-            .with_fn("input", Self::input)
-            .with_fn("input", Self::set_input)
-            .with_fn("project", Self::project)
-            .with_fn("project", Self::set_project)
-            .with_fn("file", Self::file)
-            .with_fn("file", Self::set_file)
-            .with_fn("ignore_case", Self::ignore_case)
-            .with_fn("ignore_case", Self::set_ignore_case)
-            .with_fn("new_diff_grader", Self::default)
-            .with_fn("run", Self::grade_by_diff_script);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for Query {
-    /// Builds a custom type to be registered with Rhai.
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("Query")
-            .with_fn("new_query", Self::new)
-            .with_fn("query", Self::query)
-            .with_fn("query", Self::set_query)
-            .with_fn("capture", Self::capture)
-            .with_fn("capture", Self::set_capture);
-    }
-}
-
-// Allowed because CustomType is not deprecated, just volatile
-#[allow(deprecated)]
-/// Allows registering custom types with Rhai.
-impl CustomType for QueryGrader {
-    /// Builds a custom type to be registered with Rhai.
-    fn build(mut builder: rhai::TypeBuilder<Self>) {
-        builder
-            .with_name("QueryGrader")
-            .with_fn("req_name", Self::req_name)
-            .with_fn("req_name", Self::set_req_name)
-            .with_fn("out_of", Self::out_of)
-            .with_fn("out_of", Self::set_out_of)
-            .with_fn("file", Self::file)
-            .with_fn("file", Self::set_file)
-            .with_fn("project", Self::project)
-            .with_fn("project", Self::set_project)
-            .with_fn("queries", Self::queries)
-            .with_fn("query", Self::query_script)
-            .with_fn("capture", Self::capture_script)
-            .with_fn("reason", Self::reason)
-            .with_fn("reason", Self::set_reason)
-            .with_fn("must_match_at_least_once", Self::must_match_at_least_once)
-            .with_fn("must_match_exactly_n_times", Self::must_match_exactly_n_times)
-            .with_fn("must_not_match", Self::must_not_match)
-            .with_fn("method_body_with_name", Self::method_body_with_name)
-            .with_fn("method_body_with_return_type", Self::method_body_with_return_type)
-            .with_fn("main_method", Self::main_method)
-            .with_fn("class_body_with_name", Self::class_body_with_name)
-            .with_fn("local_variables", Self::local_variables)
-            .with_fn("local_variables_with_name", Self::local_variables_with_name)
-            .with_fn("local_variables_with_type", Self::local_variables_with_type)
-            .with_fn("if_statements", Self::if_statements)
-            .with_fn("for_loops", Self::for_loops)
-            .with_fn("while_loops", Self::while_loops)
-            .with_fn("method_invocations", Self::method_invocations)
-            .with_fn("method_invocations_with_name", Self::method_invocations_with_name)
-            .with_fn("method_invocations_with_arguments", Self::method_invocations_with_arguments)
-            .with_fn("method_invocations_with_object", Self::method_invocations_with_object)
-            .with_fn("filter", Self::filter_script)
-            .with_fn("run_query", Self::run_query_script)
-            .with_fn("run", Self::grade_by_query_script)
-            .with_fn("new_query_grader", Self::default);
     }
 }

@@ -12,7 +12,8 @@ use rhai::AST;
 use state::InitCell;
 
 // TODO: replace with https://lib.rs/crates/state
-/// Fetch an environment variable or exit with a user-friendly message if it is missing.
+/// Fetch an environment variable or exit with a user-friendly message if it is
+/// missing.
 fn get_required_env(key: &str) -> String {
     match std::env::var(key) {
         Ok(v) => v,
