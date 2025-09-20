@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ArgQuoting","DependsOrder","Input","Type"],"fn":["run_task_action","when_keybindings"],"struct":["Args","KeyBindings","Pattern","Presentation","PresentationBuilder","ProblemMatcher","SettingsFile","Task","TasksFile"]};

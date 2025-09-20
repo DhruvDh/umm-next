@@ -1,0 +1,16 @@
+.DS_Store
+history.txt
+.idea
+grading/**/**/*.java
+.env
+.envrc
+rustc-ice-*
+.vs
+*.patch
+
+# Added by cargo
+
+target
+
+# Untrack PLAN doc
+PLAN.md

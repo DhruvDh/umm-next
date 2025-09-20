@@ -1,0 +1,205 @@
+//! # umm_derive
+//!
+//! Defines some proc macros to make exporting functions to rhai easier.
+
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
+use proc_macro::TokenStream;
+use proc_macro_error::{
+    abort,
+    proc_macro_error,
+};
+use quote::{
+    format_ident,
+    quote,
+    ToTokens,
+};
+use syn::{
+    parse_macro_input,
+    punctuated::Punctuated,
+    FnArg,
+    Token,
+};
+
+#[proc_macro_error]
+#[proc_macro_attribute]
+/// Generates a version of a fallible function (that uses anyhow Result) that
+/// returns an EvalAltResult instead.
+///
+/// * `input`: a token stream for a function that returns an anyhow::Result
+pub fn generate_rhai_variant(attr: TokenStream, input: TokenStream) -> TokenStream {
+    let attr = attr.to_string();
+    let mut is_impl_fn = attr.contains("Impl");
+    let is_fallible_fn = attr.contains("Fallible");
+    let to_mut_self_fn = attr.contains("Mut");
+
+    let input = parse_macro_input!(input as syn::ItemFn);
+    let og_fn = input.to_token_stream();
+    let fn_name = input.sig.ident;
+    let mut new_fn_name = format_ident!("{}_script", fn_name);
+
+    let sig_args = input.sig.inputs;
+
+    let mut is_impl_self_fn = false;
+
+    let mut args = Punctuated::<_, Token![,]>::new();
+    for arg in sig_args.clone().into_iter() {
+        let arg = match arg {
+            FnArg::Receiver(_) => {
+                is_impl_self_fn = true;
+                is_impl_fn = true;
+                continue;
+            }
+            FnArg::Typed(a) => a.pat,
+        };
+        args.push(arg);
+    }
+
+    let sig_args = if to_mut_self_fn {
+        let mut res = Punctuated::<_, Token![,]>::new();
+        for arg in sig_args.into_iter() {
+            let arg = match arg {
+                FnArg::Receiver(_) => quote! {&mut self},
+                FnArg::Typed(a) => quote! {#a},
+            };
+            res.push(quote! {#arg});
+        }
+        new_fn_name = format_ident!("{}_mut_script", fn_name);
+
+        res
+    } else {
+        let mut res = Punctuated::<_, Token![,]>::new();
+        for arg in sig_args.into_iter() {
+            let arg = match arg {
+                FnArg::Receiver(a) => quote! {#a},
+                FnArg::Typed(a) => quote! {#a},
+            };
+            res.push(quote! {#arg});
+        }
+        res
+    };
+
+    let output = if is_fallible_fn {
+        let output = input.sig.output.into_token_stream().to_string();
+
+        let output = output.replace("-> ", "").replace(' ', "");
+
+        let make_return_type = |inner_type: quote::__private::TokenStream,
+                                result: (String, String, String)| {
+            let (first, second, _) = result;
+
+            if first == "Result" {
+                let second = format_ident!("{}", second);
+                quote! {-> Result<#second<#inner_type>, Box<EvalAltResult>> }
+            } else {
+                quote!(-> Result<#inner_type, Box<EvalAltResult>> )
+            }
+        };
+
+        let nested_level_0 = |inner_type: &str, result: (String, String, String)| {
+            if inner_type == "()" {
+                make_return_type(quote! {()}, result)
+            } else if result.2 == "HashMap" {
+                let inner_type = inner_type.split(',').collect::<Vec<_>>();
+                let left = format_ident!("{}", inner_type[0]);
+                let right = format_ident!("{}", inner_type[1]);
+
+                make_return_type(quote! {HashMap<#left, #right>}, result)
+            } else {
+                let third = format_ident!("{}", result.2);
+                let inner_type = format_ident!("{}", inner_type);
+                make_return_type(quote! {#third<#inner_type>}, result)
+            }
+        };
+
+        let nested_level_1 = |output: &str, result: (String, String, String)| {
+            if output.starts_with("Vec<") {
+                let result = (result.0, result.1, String::from("Vec"));
+                let inner_type = output.replacen("Vec<", "", 1).replacen('>', "", 1);
+                nested_level_0(&inner_type, result)
+            } else if output.starts_with("HashMap<") {
+                let result = (result.0, result.1, String::from("HashMap"));
+                let inner_type = output.replacen("HashMap<", "", 1).replacen('>', "", 1);
+                nested_level_0(&inner_type, result)
+            } else {
+                abort!(output, "Second level type must be Vec or HashMap");
+            }
+        };
+
+        let nested_level_2 = |inner_type: &str, result: (String, String, String)| {
+            if inner_type.starts_with("Result<") {
+                let result = (result.0, String::from("Result"), result.2);
+                nested_level_1(
+                    &inner_type.replacen("Result<", "", 1).replacen('>', "", 1),
+                    result,
+                )
+            } else if inner_type.starts_with("Vec<") {
+                let result = (result.0, String::from("Vec"), result.2);
+                nested_level_1(
+                    &inner_type.replacen("Vec<", "", 1).replacen('>', "", 1),
+                    result,
+                )
+            } else {
+                abort!(inner_type, "Third level type must be Result or Vec");
+            }
+        };
+
+        if output.ends_with(">>>") {
+            let output = output.replacen("Result<", "", 1).replacen(">>>", "", 1);
+            let result = (String::from("Result"), String::new(), String::new());
+            nested_level_2(&output, result)
+        } else if output.ends_with(">>") {
+            let result = (String::new(), String::from("Result"), String::new());
+            nested_level_1(&output, result)
+        } else if output.ends_with('>') {
+            let inner_type = output.replacen("Result<", "", 1).replacen('>', "", 1);
+            nested_level_0(
+                &inner_type,
+                (String::new(), String::new(), String::from("Result")),
+            )
+        } else {
+            abort!(output, "Fallible functions must return an anyhow::Result");
+        }
+    } else {
+        quote! { input.sig.output.into_token_stream().to_string() }
+    };
+
+    let match_expr = if is_impl_self_fn {
+        quote! { self.#fn_name(#args) }
+    } else if is_impl_fn {
+        quote! { Self::#fn_name(#args) }
+    } else {
+        quote! { #fn_name(#args) }
+    };
+
+    // Build the output, possibly using quasi-quotation
+    let expanded = if is_fallible_fn {
+        quote! {
+            #og_fn
+
+            /// Macro generated variant of #fn_name that returns EvalAltResult.
+            /// This allows the function to be used in scripts.
+            pub fn #new_fn_name(#sig_args) #output {
+                match #match_expr {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(e.to_string().into()),
+                }
+            }
+        }
+    } else {
+        quote! {
+            #og_fn
+
+            /// Macro generated variant of #fn_name that returns EvalAltResult.
+            /// This allows the function to be used in scripts.
+            pub fn #new_fn_name(#sig_args) #output {
+                #match_expr
+            }
+        }
+    };
+
+    println!("{expanded}");
+    // Hand the output tokens back to the compiler
+    expanded.into()
+}

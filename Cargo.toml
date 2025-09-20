@@ -1,0 +1,82 @@
+cargo-features = ["profile-rustflags"]
+
+[workspace]
+members = ["umm_derive"]
+
+[package]
+name = "umm"
+version = "0.2.2"
+edition = "2024"
+default-run = "umm"
+license = "MIT"
+description = "A java build tool and scriptable autograder that generates feedback."
+repository = "https://github.com/DhruvDh/umm"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+umm_derive = { path = "./umm_derive" }
+anyhow = "1.0.79"
+lazy_static = "1.4.0"
+which = "6.0.0"
+bpaf = { version = "0.9.9", features = ["bright-color"] }
+glob = "0.3.1"
+peg = "0.8.2"
+tree-sitter = "0.22.5"
+# tree-sitter-java = { git = "https://github.com/tree-sitter/tree-sitter-java.git", rev = "39a11c8330d0b2ad75310456c378396785f79a4e" }
+tree-sitter-java = "0.21.0"
+serde = { version = "1.0.195", features = ["derive"] }
+serde_json = "1.0.111"
+tabled = "0.10.0"
+rhai = { version = "1.16.3", features = ["metadata", "decimal", "sync"] }
+self_update = { version = "0.39.0", features = ["rustls"] }
+typed-builder = "0.18.1"
+postgrest = "1.6.0"
+reqwest = { version = "0.12.3", features = ["json", "rustls-tls", "blocking"] }
+tokio = { version = "1.35.1", features = ["full"] }
+futures = "0.3.29"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+walkdir = "2.4.0"
+dotenvy = "0.15.7"
+async-openai = { git = "https://github.com/64bit/async-openai", branch = "main" }
+uuid = { version = "1.7.0", features = ["std", "v4"] }
+snailquote = "0.3.1"
+similar = { version = "2.4.0", features = [
+  "text",
+  "inline",
+  "unicode",
+  "unicode-segmentation",
+] }
+colored = "2.1.0"
+itertools = "0.12.0"
+thiserror = "1.0.56"
+# comrak = { version = "0.21.0", features = [
+#   "shell-words",
+#   "syntect",
+#   "xdg",
+#   "arbitrary",
+#   "emojis",
+#   "shortcodes",
+# ] }
+axum = "0.7.4"
+state = "0.6.0"
+zip = "0.6.6"
+chrono = "0.4.31"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10.63", features = ["vendored"] }
+reqwest = { version = "0.12.4", features = ["json"] }
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[package.metadata.bundle]
+name = "umm"
+identifier = "io.github.dhruvdh.umm"
+version = "0.2.0-spring24"
+short-description = "A java build tool and scriptable autograder that generates feedback."
+category = "public.app-category.developer-tools"

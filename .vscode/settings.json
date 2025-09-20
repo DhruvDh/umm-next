@@ -1,0 +1,10 @@
+{
+  "grammarly.selectors": [
+    {
+      "language": "markdown",
+      "scheme": "file"
+    }
+  ],
+  "deno.enable": true,
+  "deno.importMap": "./supabase/functions/openai-feedback/import_map.json"
+}
