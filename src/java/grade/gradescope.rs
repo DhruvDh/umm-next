@@ -373,8 +373,10 @@ async fn generate_slo_responses(
                 .collect(),
         };
 
-        let relevant_file_codes: Vec<String> =
-            relevant_files.iter().map(|x| x.parser().code()).collect();
+        let relevant_file_codes: Vec<String> = relevant_files
+            .iter()
+            .map(|x| x.code().to_string())
+            .collect();
 
         ensure!(
             !relevant_file_codes.is_empty(),

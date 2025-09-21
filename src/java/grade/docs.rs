@@ -19,7 +19,7 @@ use crate::{
     java::{JavaFileError, Project},
     parsers::parser,
 };
-#[derive(Clone, Default)]
+#[derive(Clone)]
 /// A struct representing arguments to grade_docs function
 pub struct DocsGrader {
     /// * `project`: the project to grade
@@ -33,6 +33,18 @@ pub struct DocsGrader {
     /// * `penalty`: the penalty to apply for each instance of a violation.
     ///   Optional, default is 3
     pub penalty:  f64,
+}
+
+impl Default for DocsGrader {
+    fn default() -> Self {
+        Self {
+            project:  Project::default(),
+            files:    Array::new(),
+            out_of:   0.0,
+            req_name: String::new(),
+            penalty:  3.0,
+        }
+    }
 }
 
 impl DocsGrader {

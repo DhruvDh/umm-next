@@ -15,8 +15,8 @@ use crate::{
     constants::{
         CLASS_CONSTRUCTOR_QUERY, CLASS_DECLARATION_QUERY, CLASS_FIELDS_QUERY, CLASS_METHOD_QUERY,
         CLASSNAME_QUERY, IMPORT_QUERY, INTERFACE_CONSTANTS_QUERY, INTERFACE_DECLARATION_QUERY,
-        INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY, JUNIT_PLATFORM, PACKAGE_QUERY,
-        TEST_ANNOTATION_QUERY,
+        INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY, JUNIT_PLATFORM, MAIN_METHOD_QUERY,
+        PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
     },
     java::grade::{JavacDiagnostic, LineRef},
     parsers::parser,
@@ -146,38 +146,44 @@ impl File {
             }
         };
 
-        let (kind, name) = 'outer: {
-            let work = vec![
-                (FileType::Interface, INTERFACENAME_QUERY),
-                (FileType::ClassWithMain, CLASSNAME_QUERY),
-                (FileType::Class, CLASSNAME_QUERY),
-            ];
-            for (kind, query) in work {
-                let result = parser.query(query)?;
-
-                if !result.is_empty() {
-                    break 'outer (
-                        kind,
-                        #[allow(clippy::or_fun_call)]
-                        result
-                            .first()
-                            .ok_or(anyhow!(
-                                "Could not find a valid class/interface declaration for {} (vec \
-                                 size is 0)",
+        let has_main = !parser.query(MAIN_METHOD_QUERY)?.is_empty();
+        let (kind, name) = {
+            let interface = parser.query(INTERFACENAME_QUERY)?;
+            if let Some(first) = interface.first() {
+                let name = first
+                    .get("name")
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Could not find a valid interface declaration for {} (hashmap has no \
+                             name key)",
+                            path.display()
+                        )
+                    })?
+                    .to_string();
+                (FileType::Interface, name)
+            } else {
+                let classes = parser.query(CLASSNAME_QUERY)?;
+                if let Some(first) = classes.first() {
+                    let name = first
+                        .get("name")
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Could not find a valid class declaration for {} (hashmap has no \
+                                 name key)",
                                 path.display()
-                            ))?
-                            .get("name")
-                            .ok_or(anyhow!(
-                                "Could not find a valid class/interface declaration for {} \
-                                 (hashmap has no name key) ",
-                                path.display()
-                            ))?
-                            .to_string(),
-                    );
+                            )
+                        })?
+                        .to_string();
+                    let kind = if has_main {
+                        FileType::ClassWithMain
+                    } else {
+                        FileType::Class
+                    };
+                    (kind, name)
+                } else {
+                    (FileType::Class, String::new())
                 }
             }
-
-            (FileType::Class, String::new())
         };
 
         let proper_name = if let Some(pkg) = package_name.as_ref() {
@@ -707,9 +713,14 @@ impl File {
         self.package_name.as_ref()
     }
 
-    /// Get a reference to the file's parser.
-    pub fn parser(&self) -> Parser {
-        self.parser.clone()
+    /// Borrow the underlying parser.
+    pub fn parser(&self) -> &Parser {
+        &self.parser
+    }
+
+    /// Returns the source code associated with this file.
+    pub fn code(&self) -> &str {
+        self.parser.code()
     }
 
     /// Get a reference to the file's description.

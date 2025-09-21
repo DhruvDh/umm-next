@@ -5,14 +5,36 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
+    sync::atomic::Ordering,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
 use glob::glob;
+use reqwest::Client;
+use state::InitCell;
 use tokio::io::AsyncWriteExt;
 use which::which;
 
 use crate::{constants::USE_ACTIVE_RETRIEVAL, java::ProjectPaths};
+
+/// Shared reqwest client configured with CLI-friendly defaults.
+static HTTP_CLIENT: InitCell<Client> = InitCell::new();
+
+/// Returns the shared reqwest client, initializing it on demand.
+fn http_client() -> &'static Client {
+    if let Some(client) = HTTP_CLIENT.try_get() {
+        client
+    } else {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("umm/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("failed to construct HTTP client");
+        HTTP_CLIENT.set(client);
+        HTTP_CLIENT.get()
+    }
+}
 
 /// Finds and returns the path to javac binary
 pub fn javac_path() -> Result<OsString> {
@@ -103,53 +125,66 @@ pub async fn download(url: &str, path: &PathBuf, replace: bool) -> Result<()> {
     if !replace && path.exists() {
         Ok(())
     } else {
-        let bytes = reqwest::get(url)
+        let response = http_client()
+            .get(url)
+            .send()
             .await
-            .context(format!("Failed to download url: {url}"))?
+            .with_context(|| format!("Failed to download url: {url}"))?
+            .error_for_status()
+            .with_context(|| format!("Request returned error status for url: {url}"))?;
+
+        let bytes = response
             .bytes()
             .await
-            .context(format!("Failed to read response as bytes: {url}"))?;
+            .with_context(|| format!("Failed to read response as bytes: {url}"))?;
 
-        let name = path.file_name().unwrap().to_str().unwrap();
+        let display_name = path.display().to_string();
 
         let mut file = tokio::fs::File::create(path)
             .await
-            .context(format!("Failed to create file at {name}"))?;
+            .with_context(|| format!("Failed to create file at {display_name}"))?;
 
         file.write_all(&bytes)
             .await
-            .context(format!("Failed to write to file at {name}"))
+            .with_context(|| format!("Failed to write to file at {display_name}"))
     }
 }
 
 /// Download a URL and return response as string
 pub async fn download_to_string(url: &str) -> Result<String> {
-    reqwest::get(url)
+    http_client()
+        .get(url)
+        .send()
         .await
-        .context(format!("Failed to download url: {url}"))?
+        .with_context(|| format!("Failed to download url: {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Request returned error status for url: {url}"))?
         .text()
         .await
-        .context(format!("Failed to read response as text: {url}"))
+        .with_context(|| format!("Failed to read response as text: {url}"))
 }
 
 /// Download a URL and return response as JSON
 pub async fn download_to_json(url: &str) -> Result<HashMap<String, String>> {
-    reqwest::get(url)
+    http_client()
+        .get(url)
+        .send()
         .await
-        .context(format!("Failed to download url: {url}"))?
+        .with_context(|| format!("Failed to download url: {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Request returned error status for url: {url}"))?
         .json()
         .await
-        .context(format!("Failed to read response as json: {url}"))
+        .with_context(|| format!("Failed to read response as json: {url}"))
 }
 
 /// Use active retrieval when retrieving context from student submission.
 pub fn use_active_retrieval() {
-    USE_ACTIVE_RETRIEVAL.set(true);
-    dbg!(USE_ACTIVE_RETRIEVAL.get());
+    USE_ACTIVE_RETRIEVAL.store(true, Ordering::Relaxed);
 }
 
 /// Use heuristic based retrieval when retrieving context from student
 /// submission.
 pub fn use_heuristic_retrieval() {
-    USE_ACTIVE_RETRIEVAL.set(false);
+    USE_ACTIVE_RETRIEVAL.store(false, Ordering::Relaxed);
 }

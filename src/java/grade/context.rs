@@ -231,7 +231,7 @@ pub fn get_source_context<T: Into<LineRef>>(
         .take(max_line_refs)
         .for_each(|(file, f, r)| {
             let num_lines = r.size_hint().0;
-            let count = file.parser().code().lines().count();
+            let count = file.code().lines().count();
 
             let (f, r) = if num_lines as f32 >= 0.6 * (count as f32) {
                 (f, 0..=count)
@@ -248,8 +248,7 @@ pub fn get_source_context<T: Into<LineRef>>(
 
             let width = (count as f32).log10().ceil() as usize;
 
-            let source_code_lines: Vec<String> =
-                file.parser().code().lines().map(String::from).collect();
+            let source_code_lines: Vec<String> = file.code().lines().map(String::from).collect();
 
             let relevant_source = source_code_lines
                 .clone()

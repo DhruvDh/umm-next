@@ -66,8 +66,8 @@ impl Parser {
     }
 
     /// A getter for parser's source code
-    pub fn code(&mut self) -> String {
-        self.code.clone()
+    pub fn code(&self) -> &str {
+        self.code.as_str()
     }
 
     /// A setter for parser's source code

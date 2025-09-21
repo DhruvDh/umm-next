@@ -282,7 +282,7 @@ impl Project {
             markdown.push_str(&format!(
                 "### {}\n\n```java\n{}\n```\n\n",
                 file.proper_name(),
-                file.parser().code()
+                file.code()
             ));
         }
         let id = uuid::Uuid::new_v4().to_string();

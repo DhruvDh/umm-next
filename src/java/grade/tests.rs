@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     io::{BufRead, BufReader, Write},
     process::Command,
@@ -18,7 +19,7 @@ use super::{
 };
 use crate::{
     config,
-    constants::{PROMPT_TRUNCATE, USE_ACTIVE_RETRIEVAL},
+    constants::{PROMPT_TRUNCATE, active_retrieval_enabled},
     java::{JavaFileError, Project, ProjectPaths},
     parsers::parser,
     util::{classpath, java_path},
@@ -132,17 +133,47 @@ impl ByUnitTestGrader {
             actual_tests.sort();
 
             if !expected_tests.is_empty() {
+                let expected_full: HashSet<&str> = expected_tests
+                    .iter()
+                    .filter(|value| value.contains('#'))
+                    .map(|value| value.as_str())
+                    .collect();
+                let expected_methods: HashSet<&str> = expected_tests
+                    .iter()
+                    .filter(|value| !value.contains('#'))
+                    .map(|value| value.as_str())
+                    .collect();
+
                 for expected in &expected_tests {
-                    let n = expected.split_once('#').unwrap().1;
-                    if !actual_tests.contains(expected) {
-                        reasons.push(format!("- {n} not found."));
+                    let method_name = expected
+                        .split_once('#')
+                        .map(|(_, method)| method)
+                        .unwrap_or(expected.as_str());
+                    let missing = if expected.contains('#') {
+                        !actual_tests.contains(expected)
+                    } else {
+                        !actual_tests.iter().any(|actual| {
+                            actual
+                                .split_once('#')
+                                .map(|(_, method)| method)
+                                .unwrap_or(actual.as_str())
+                                == method_name
+                        })
+                    };
+                    if missing {
+                        reasons.push(format!("- {method_name} not found."));
                     }
                 }
 
                 for actual in &actual_tests {
-                    let n = actual.split_once('#').unwrap().1;
-                    if !expected_tests.contains(actual) {
-                        reasons.push(format!("- Unexpected test called {n}"));
+                    let method_name = actual
+                        .split_once('#')
+                        .map(|(_, method)| method)
+                        .unwrap_or(actual.as_str());
+                    let expected_match = expected_full.contains(actual.as_str())
+                        || expected_methods.contains(method_name);
+                    if !expected_match {
+                        reasons.push(format!("- Unexpected test called {method_name}"));
                     }
                 }
             }
@@ -243,7 +274,7 @@ impl ByUnitTestGrader {
                                 3,
                                 6,
                                 6,
-                                *USE_ACTIVE_RETRIEVAL.try_get().unwrap_or(&false),
+                                active_retrieval_enabled(),
                                 Some(updated_stacktrace.join("\n")),
                             )?,
                         ]);

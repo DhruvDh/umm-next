@@ -288,7 +288,7 @@ impl DiffGrader {
                 "{prompt}\n\nSource code:\n```java\n{code}\n```\nMy tests are failing due to the \
                  above.",
                 prompt = prompts.join("\n\n"),
-                code = file.parser().code()
+                code = file.code()
             );
 
             Ok(GradeResult {

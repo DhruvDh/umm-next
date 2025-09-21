@@ -1,11 +1,13 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use lazy_static::lazy_static;
 use rhai::AST;
-use state::InitCell;
 
 lazy_static! {
     /// Rhai script as a AST, behind an mutex.
@@ -87,4 +89,9 @@ pub const INTERFACE_METHODS_QUERY: &str = include_str!("queries/interface_method
 pub const METHOD_CALL_QUERY: &str = include_str!("queries/method_invocation.scm");
 
 /// Whether to use active retrieval or heuristic based retrieval
-pub static USE_ACTIVE_RETRIEVAL: InitCell<bool> = InitCell::new();
+pub static USE_ACTIVE_RETRIEVAL: AtomicBool = AtomicBool::new(false);
+
+/// Helper to read the active retrieval flag.
+pub fn active_retrieval_enabled() -> bool {
+    USE_ACTIVE_RETRIEVAL.load(Ordering::Relaxed)
+}
