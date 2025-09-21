@@ -18,7 +18,7 @@ use crate::{
         INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY, JUNIT_PLATFORM, PACKAGE_QUERY,
         TEST_ANNOTATION_QUERY,
     },
-    grade::{JavacDiagnostic, LineRef},
+    java::grade::{JavacDiagnostic, LineRef},
     parsers::parser,
     util::{classpath, java_path, javac_path, sourcepath},
 };
@@ -180,8 +180,8 @@ impl File {
             (FileType::Class, String::new())
         };
 
-        let proper_name = if package_name.is_some() {
-            format!("{}.{}", package_name.as_ref().unwrap(), name)
+        let proper_name = if let Some(pkg) = package_name.as_ref() {
+            format!("{pkg}.{name}")
         } else {
             name.clone()
         };

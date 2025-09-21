@@ -3,6 +3,8 @@
 
 /// File type definitions and helpers.
 pub mod file;
+/// Java-specific grading utilities.
+pub mod grade;
 /// Tree-sitter parser wrapper.
 pub mod parser;
 /// Project path configuration helpers.

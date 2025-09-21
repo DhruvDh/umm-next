@@ -13,8 +13,7 @@
 pub mod config;
 /// A module defining a bunch of constant values to be used throughout
 pub mod constants;
-/// For all things related to grading
-pub mod grade;
+// For all things related to grading see `java::grade` module.
 /// For all things related to project health
 pub mod health;
 /// For discovering Java projects, analyzing them, and generating/executing

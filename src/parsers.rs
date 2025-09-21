@@ -1,4 +1,4 @@
-use crate::grade::{JavacDiagnostic, LineRef, MutationDiagnostic};
+use crate::java::grade::{JavacDiagnostic, LineRef, MutationDiagnostic};
 
 peg::parser! {
     /// includes some useful grammars for parsing JUNit/javac/pitest outputs.
@@ -228,7 +228,7 @@ mod tests {
         let line = "Foo,Bar,org.pitest.mutationtest.engine.gregor.mutators.MathMutator,method,42,\
                     SURVIVED,none";
         let diag = parser::mutation_report_row(line).expect("should parse mutation row with none");
-        let lr: crate::grade::LineRef = diag.clone().into();
+        let lr: crate::java::grade::LineRef = diag.clone().into();
         assert_eq!(lr.line_number, 42);
         assert_eq!(lr.file_name(), "Bar");
         let v = serde_json::to_value(&diag).unwrap();
@@ -243,7 +243,7 @@ mod tests {
                     testAdds()]";
         let diag =
             parser::mutation_report_row(line).expect("should parse mutation row with class/method");
-        let lr: crate::grade::LineRef = diag.clone().into();
+        let lr: crate::java::grade::LineRef = diag.clone().into();
         assert_eq!(lr.line_number, 7);
         let v = serde_json::to_value(&diag).unwrap();
         assert_eq!(v["result"], "KILLED");
