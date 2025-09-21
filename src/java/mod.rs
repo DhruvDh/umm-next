@@ -15,4 +15,4 @@ pub mod project;
 pub use file::{File, FileType, JavaFileError};
 pub use parser::Parser;
 pub use paths::ProjectPaths;
-pub use project::{Project, SubmissionRow};
+pub use project::Project;
