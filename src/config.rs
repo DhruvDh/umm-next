@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use async_openai::types::ReasoningEffort;
 use postgrest::Postgrest;
 use state::InitCell;
 use tokio::runtime::Runtime;
@@ -169,11 +170,146 @@ impl Prompts {
     }
 }
 
-/// Runtime and prompt configuration shared across the crate.
+/// Supabase credentials loaded from the environment, if available.
 #[derive(Clone)]
+struct SupabaseEnv {
+    /// Fully qualified PostgREST endpoint.
+    rest_endpoint: String,
+    /// API key used for PostgREST requests.
+    api_key:       String,
+}
+
+impl SupabaseEnv {
+    /// Builds a Supabase credential bundle from environment-provided values.
+    fn new(url: String, key: String) -> Self {
+        let rest_endpoint = format!("{}/rest/v1", url.trim_end_matches('/'));
+        Self {
+            rest_endpoint,
+            api_key: key,
+        }
+    }
+}
+
+/// Parses the optional reasoning-effort environment value into the OpenAI enum,
+/// defaulting to `ReasoningEffort::Medium` when unset or unrecognised.
+fn parse_reasoning_effort(val: Option<String>) -> ReasoningEffort {
+    match val
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+        .unwrap_or("medium")
+    {
+        "low" => ReasoningEffort::Low,
+        "high" => ReasoningEffort::High,
+        _ => ReasoningEffort::Medium,
+    }
+}
+
+/// OpenAI credentials and optional tuning parameters sourced from the
+/// environment.
+pub struct OpenAiEnv {
+    /// Base URL for the OpenAI-compatible API endpoint.
+    api_base:         String,
+    /// API key used to authenticate OpenAI requests.
+    api_key:          String,
+    /// Default model identifier for chat completions.
+    model:            String,
+    /// Optional temperature override, if provided.
+    temperature:      Option<f32>,
+    /// Optional top-p override, if provided.
+    top_p:            Option<f32>,
+    /// Reasoning effort hint to send with requests.
+    reasoning_effort: ReasoningEffort,
+}
+
+impl OpenAiEnv {
+    /// Construct an `OpenAiEnv` from environment variables; returns `None` if
+    /// any required field is missing.
+    fn from_env() -> Option<Self> {
+        let api_base = std::env::var("OPENAI_ENDPOINT").ok()?.trim().to_owned();
+        let api_key = std::env::var("OPENAI_API_KEY_SLO").ok()?.trim().to_owned();
+        let model = std::env::var("OPENAI_MODEL").ok()?.trim().to_owned();
+
+        if api_base.is_empty() || api_key.is_empty() || model.is_empty() {
+            return None;
+        }
+
+        let temperature = std::env::var("OPENAI_TEMPERATURE")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok());
+        let top_p = std::env::var("OPENAI_TOP_P")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok());
+        let reasoning_effort =
+            parse_reasoning_effort(std::env::var("OPENAI_REASONING_EFFORT").ok());
+
+        Some(Self {
+            api_base,
+            api_key,
+            model,
+            temperature,
+            top_p,
+            reasoning_effort,
+        })
+    }
+
+    /// Returns the API base URL used for OpenAI requests.
+    pub fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
+    /// Returns the API key used for OpenAI requests.
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    /// Returns the default model identifier.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Returns the configured temperature, if any.
+    pub fn temperature(&self) -> Option<f32> {
+        self.temperature
+    }
+
+    /// Returns the configured top_p, if any.
+    pub fn top_p(&self) -> Option<f32> {
+        self.top_p
+    }
+
+    /// Returns the reasoning effort level (defaults to Medium when
+    /// unspecified).
+    pub fn reasoning_effort(&self) -> ReasoningEffort {
+        self.reasoning_effort.clone()
+    }
+}
+
+impl Clone for OpenAiEnv {
+    fn clone(&self) -> Self {
+        let reasoning_effort = match self.reasoning_effort {
+            ReasoningEffort::Low => ReasoningEffort::Low,
+            ReasoningEffort::Medium => ReasoningEffort::Medium,
+            ReasoningEffort::High => ReasoningEffort::High,
+            ReasoningEffort::Minimal => ReasoningEffort::Minimal,
+        };
+
+        Self {
+            api_base: self.api_base.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            temperature: self.temperature,
+            top_p: self.top_p,
+            reasoning_effort,
+        }
+    }
+}
+
+/// Runtime and prompt configuration shared across the crate.
 pub struct Config {
-    /// Supabase PostgREST client seeded with the API key.
-    postgrest: Postgrest,
+    /// Supabase credentials, if configured.
+    supabase:  Option<SupabaseEnv>,
+    /// Lazily constructed Supabase PostgREST client.
+    postgrest: InitCell<Postgrest>,
     /// Shared Tokio runtime for async helpers (downloads, Supabase calls).
     runtime:   Arc<Runtime>,
     /// Loaded prompt catalog used by graders and retrieval helpers.
@@ -182,16 +318,21 @@ pub struct Config {
     course:    String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
     term:      String,
+    /// Cached OpenAI configuration, if available.
+    openai:    Option<OpenAiEnv>,
 }
 
 impl Config {
     /// Construct a new configuration instance by reading environment and prompt
     /// assets.
     fn new() -> Result<Self> {
-        let supabase_url = get_required_env("SUPABASE_URL");
-        let supabase_key = get_required_env("SUPABASE_ANON_KEY");
-        let rest_url = format!("{}/rest/v1", supabase_url.trim_end_matches('/'));
-        let postgrest = Postgrest::new(rest_url).insert_header("apiKey", supabase_key);
+        let supabase =
+            match (std::env::var("SUPABASE_URL").ok(), std::env::var("SUPABASE_ANON_KEY").ok()) {
+                (Some(url), Some(key)) if !url.trim().is_empty() && !key.trim().is_empty() => {
+                    Some(SupabaseEnv::new(url, key))
+                }
+                _ => None,
+            };
 
         let runtime = Runtime::new().context("Failed to create shared Tokio runtime")?;
         let prompts = Prompts::load();
@@ -200,17 +341,27 @@ impl Config {
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
 
         Ok(Self {
-            postgrest,
+            supabase,
+            postgrest: InitCell::new(),
             runtime: Arc::new(runtime),
             prompts,
             course,
             term,
+            openai: OpenAiEnv::from_env(),
         })
     }
 
-    /// Returns the configured PostgREST client.
-    pub fn postgrest(&self) -> Postgrest {
-        self.postgrest.clone()
+    /// Returns the configured PostgREST client if credentials are available.
+    pub fn postgrest(&self) -> Option<Postgrest> {
+        if let Some(client) = self.postgrest.try_get() {
+            return Some(client.clone());
+        }
+
+        let creds = self.supabase.as_ref()?;
+        let client = Postgrest::new(creds.rest_endpoint.clone())
+            .insert_header("apiKey", creds.api_key.clone());
+        self.postgrest.set(client);
+        Some(self.postgrest.get().clone())
     }
 
     /// Returns the shared Tokio runtime.
@@ -231,6 +382,12 @@ impl Config {
     /// Returns the prompt bundle.
     pub fn prompts(&self) -> &Prompts {
         &self.prompts
+    }
+
+    /// Returns the OpenAI configuration, if all required environment variables
+    /// are present.
+    pub fn openai(&self) -> Option<&OpenAiEnv> {
+        self.openai.as_ref()
     }
 }
 
@@ -254,8 +411,8 @@ pub fn get() -> &'static Config {
     ensure_initialized().expect("configuration initialization failed")
 }
 
-/// Returns the configured PostgREST client.
-pub fn postgrest_client() -> Postgrest {
+/// Returns the configured PostgREST client, if Supabase has been configured.
+pub fn postgrest_client() -> Option<Postgrest> {
     get().postgrest()
 }
 
@@ -279,17 +436,7 @@ pub fn prompts() -> &'static Prompts {
     get().prompts()
 }
 
-/// Fetch an environment variable or terminate with a helpful message.
-fn get_required_env(key: &str) -> String {
-    match std::env::var(key) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!(
-                "Missing required environment variable: {}.\n\nSet {} to configure Supabase and \
-                 try again.",
-                key, key
-            );
-            std::process::exit(2);
-        }
-    }
+/// Returns the configured OpenAI environment, if set.
+pub fn openai_config() -> Option<&'static OpenAiEnv> {
+    get().openai()
 }

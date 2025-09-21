@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fs, io::Write};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use async_openai::{
     Client as OpenAIClient,
     config::OpenAIConfig,
@@ -8,7 +8,6 @@ use async_openai::{
     types::{
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         CreateChatCompletionRequest, CreateChatCompletionResponse,
-        ReasoningEffort as ChatReasoningEffort,
     },
 };
 use rhai::{Array, Dynamic, Map};
@@ -22,7 +21,7 @@ use typed_builder::TypedBuilder;
 
 use super::{feedback::generate_single_feedback, results::GradeResult};
 use crate::{
-    config,
+    config::{self, OpenAiEnv},
     java::{File, Project},
 };
 /// Represents output format settings for Gradescope submissions.
@@ -196,6 +195,7 @@ enum SLOFileType {
 
 async fn generate_combined_slo_report(
     slo_responses: Vec<(&str, Result<CreateChatCompletionResponse, OpenAIError>)>,
+    openai: &OpenAiEnv,
 ) -> Result<String> {
     let mut individual_feedbacks = Vec::new();
 
@@ -222,14 +222,8 @@ async fn generate_combined_slo_report(
 
     let openai_client = OpenAIClient::with_config(
         OpenAIConfig::new()
-            .with_api_base(
-                std::env::var("OPENAI_ENDPOINT")
-                    .context("OPENAI_ENDPOINT must be set for SLO feedback")?,
-            )
-            .with_api_key(
-                std::env::var("OPENAI_API_KEY_SLO")
-                    .context("OPENAI_API_KEY_SLO must be set for SLO feedback")?,
-            ),
+            .with_api_base(openai.api_base().to_owned())
+            .with_api_key(openai.api_key().to_owned()),
     );
 
     let messages = vec![
@@ -255,25 +249,16 @@ async fn generate_combined_slo_report(
             .into(),
     ];
 
-    let temp_opt = std::env::var("OPENAI_TEMPERATURE")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok());
-    let top_p_opt = std::env::var("OPENAI_TOP_P")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok());
-    let effort = parse_reasoning_effort(std::env::var("OPENAI_REASONING_EFFORT").ok());
-
     let response = openai_client
         .chat()
         .create(CreateChatCompletionRequest {
-            model: std::env::var("OPENAI_MODEL")
-                .context("OPENAI_MODEL must be set for SLO feedback")?,
+            model: openai.model().to_owned(),
             messages,
-            temperature: temp_opt,
-            top_p: top_p_opt,
+            temperature: openai.temperature(),
+            top_p: openai.top_p(),
             n: Some(1),
             stream: Some(false),
-            reasoning_effort: Some(effort),
+            reasoning_effort: Some(openai.reasoning_effort()),
             ..Default::default()
         })
         .await?;
@@ -305,7 +290,8 @@ async fn generate_slo_responses(
     test_files: &[String],
     project_title: &str,
     project_description: &str,
-    enabled_slos: &HashSet<String>, // New parameter
+    enabled_slos: &HashSet<String>,
+    openai: &OpenAiEnv,
 ) -> Result<Vec<(&'static str, Result<CreateChatCompletionResponse, OpenAIError>)>> {
     let prompts = config::prompts();
     let slos = vec![
@@ -411,38 +397,24 @@ async fn generate_slo_responses(
                 .into(),
         ];
 
+        let openai_config = openai.clone();
         slo_requests.push(async move {
             let openai_client = OpenAIClient::with_config(
                 OpenAIConfig::new()
-                    .with_api_base(
-                        std::env::var("OPENAI_ENDPOINT")
-                            .expect("OPENAI_ENDPOINT must be set for SLO feedback"),
-                    )
-                    .with_api_key(
-                        std::env::var("OPENAI_API_KEY_SLO")
-                            .expect("OPENAI_API_KEY_SLO must be set for SLO feedback"),
-                    ),
+                    .with_api_base(openai_config.api_base().to_owned())
+                    .with_api_key(openai_config.api_key().to_owned()),
             );
-
-            let temp_opt = std::env::var("OPENAI_TEMPERATURE")
-                .ok()
-                .and_then(|s| s.parse::<f32>().ok());
-            let top_p_opt = std::env::var("OPENAI_TOP_P")
-                .ok()
-                .and_then(|s| s.parse::<f32>().ok());
-            let effort = parse_reasoning_effort(std::env::var("OPENAI_REASONING_EFFORT").ok());
 
             let response = openai_client
                 .chat()
                 .create(CreateChatCompletionRequest {
-                    model: std::env::var("OPENAI_MODEL")
-                        .expect("OPENAI_MODEL must be set for SLO feedback"),
+                    model: openai_config.model().to_owned(),
                     messages: messages.clone(),
-                    temperature: temp_opt,
-                    top_p: top_p_opt,
+                    temperature: openai_config.temperature(),
+                    top_p: openai_config.top_p(),
                     n: Some(1),
                     stream: Some(false),
-                    reasoning_effort: Some(effort),
+                    reasoning_effort: Some(openai_config.reasoning_effort()),
                     ..Default::default()
                 })
                 .await;
@@ -453,20 +425,6 @@ async fn generate_slo_responses(
 
     let slo_responses = futures::future::join_all(slo_requests).await;
     Ok(slo_responses)
-}
-
-/// Convert an optional environment string into a `ChatReasoningEffort`, falling
-/// back to `Medium`.
-fn parse_reasoning_effort(val: Option<String>) -> ChatReasoningEffort {
-    match val
-        .map(|s| s.to_ascii_lowercase())
-        .as_deref()
-        .unwrap_or("medium")
-    {
-        "low" => ChatReasoningEffort::Low,
-        "high" => ChatReasoningEffort::High,
-        _ => ChatReasoningEffort::Medium,
-    }
 }
 
 /// Print grade result
@@ -642,6 +600,13 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
                 "Project description must be specified to generate SLO feedback"
             );
 
+            let openai_env = config::openai_config().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OPENAI_ENDPOINT, OPENAI_API_KEY_SLO, and OPENAI_MODEL must be set to \
+                     generate SLO feedback"
+                )
+            })?;
+
             let slo_responses = runtime.block_on(async {
                 generate_slo_responses(
                     &project,
@@ -650,12 +615,14 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
                     &project_title,
                     &project_description,
                     &enabled_slos,
+                    openai_env,
                 )
                 .await
             })?;
 
-            let combined_report =
-                runtime.block_on(async { generate_combined_slo_report(slo_responses).await })?;
+            let combined_report = runtime.block_on(async {
+                generate_combined_slo_report(slo_responses, openai_env).await
+            })?;
 
             test_cases.push(
                 GradescopeTestCase::builder()

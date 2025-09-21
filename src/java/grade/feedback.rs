@@ -1,6 +1,6 @@
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_openai::types::ChatCompletionRequestMessage;
 use rhai::Array;
 use serde::Serialize;
@@ -28,10 +28,14 @@ pub struct PromptRow {
 
 /// Generates feedback for a single `GradeResult` and posts it to the database.
 pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
-    let runtime = config::runtime();
-    let client = config::postgrest_client();
-
     if result.grade_value() < result.out_of_value() {
+        let client = config::postgrest_client().ok_or_else(|| {
+            anyhow!(
+                "SUPABASE_URL and SUPABASE_ANON_KEY must be set to generate detailed penalty \
+                 feedback."
+            )
+        })?;
+        let runtime = config::runtime();
         let id = Uuid::new_v4().to_string();
         let mut result = result.clone();
         let body = PromptRow {
@@ -68,10 +72,8 @@ pub fn generate_feedback(results: Array) -> Result<()> {
     let mut feedback = vec!["## Understanding Your Autograder Results\n".to_string()];
 
     for result in results.iter().map(|f| f.clone().cast::<GradeResult>()) {
-        match generate_single_feedback(&result) {
-            Ok(fb) => feedback.push(fb),
-            Err(e) => eprintln!("Error generating feedback: {}", e),
-        }
+        let fb = generate_single_feedback(&result)?;
+        feedback.push(fb);
     }
 
     if !feedback.is_empty() {
