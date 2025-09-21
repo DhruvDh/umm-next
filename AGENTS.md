@@ -23,6 +23,9 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
 - When the work naturally splits into a commit, suggest or create a concise,
   descriptive commit message (e.g., “refactor: route project paths through
   ProjectPaths”).
+- Treat the user as the sole gatekeeper for version-control changes. Do not
+  apply edits beyond exploratory inspection without explicit approval, and
+  confirm proposed code adjustments before modifying files.
 
 ## 3. During the Task
 

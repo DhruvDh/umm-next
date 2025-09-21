@@ -286,6 +286,7 @@ impl OpenAiEnv {
 
 impl Clone for OpenAiEnv {
     fn clone(&self) -> Self {
+        #[allow(clippy::needless_match)]
         let reasoning_effort = match self.reasoning_effort {
             ReasoningEffort::Low => ReasoningEffort::Low,
             ReasoningEffort::Medium => ReasoningEffort::Medium,
