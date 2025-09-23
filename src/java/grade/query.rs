@@ -15,6 +15,8 @@ use crate::{
 /// Lazily initialized Rhai AST storage retained while scripting is disabled.
 static SCRIPT_AST: OnceLock<Arc<Mutex<AST>>> = OnceLock::new();
 
+/// Shared Rhai AST placeholder retained while the grading flow migrates off
+/// Rhai.
 fn script_ast() -> &'static Arc<Mutex<AST>> {
     SCRIPT_AST.get_or_init(|| Arc::new(Mutex::new(AST::empty())))
 }

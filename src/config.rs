@@ -411,7 +411,8 @@ impl ConfigState {
     }
 }
 
-/// Borrowed view of the prompt catalog that keeps the underlying configuration alive.
+/// Borrowed view of the prompt catalog that keeps the underlying configuration
+/// alive.
 pub struct PromptsRef(ConfigHandle);
 
 impl std::ops::Deref for PromptsRef {
@@ -445,14 +446,17 @@ impl std::ops::Deref for ConfigHandle {
     }
 }
 
+/// Global storage for the lazily constructed configuration state.
 static CONFIG_SLOT: OnceLock<Mutex<Option<Arc<ConfigState>>>> = OnceLock::new();
 
+/// Returns the mutex guarding the global configuration slot.
 fn slot() -> &'static Mutex<Option<Arc<ConfigState>>> {
     CONFIG_SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// Builds a fresh configuration instance and wraps it in an `Arc`.
 fn build_default() -> Result<Arc<ConfigState>> {
-    ConfigState::new().map(|cfg| Arc::new(cfg))
+    ConfigState::new().map(Arc::new)
 }
 
 /// Ensure the global configuration has been initialized and return a handle.
