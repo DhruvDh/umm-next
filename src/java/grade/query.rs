@@ -1,16 +1,23 @@
+use std::sync::{Arc, Mutex, OnceLock};
+
 use anyhow::{Context, Result};
 use async_openai::types::ChatCompletionRequestSystemMessageArgs;
 use itertools::Itertools;
-use rhai::{Array, Dynamic, FnPtr};
+use rhai::{AST, Array, Dynamic, FnPtr};
 use snailquote::unescape;
 
 use super::results::{Grade, GradeResult};
 use crate::{
-    config,
-    constants::SCRIPT_AST,
-    create_engine,
+    config, create_engine,
     java::{Parser, Project},
 };
+
+/// Lazily initialized Rhai AST storage retained while scripting is disabled.
+static SCRIPT_AST: OnceLock<Arc<Mutex<AST>>> = OnceLock::new();
+
+fn script_ast() -> &'static Arc<Mutex<AST>> {
+    SCRIPT_AST.get_or_init(|| Arc::new(Mutex::new(AST::empty())))
+}
 #[derive(Default, Debug, Clone)]
 /// A struct to represent a treesitter query.
 pub struct Query {
@@ -413,7 +420,7 @@ impl QueryGrader {
     /// importantly is more accurate.
     pub fn run_query(&self) -> Result<Dynamic, QueryError> {
         let engine = create_engine();
-        let ast = std::sync::Arc::clone(&SCRIPT_AST);
+        let ast = Arc::clone(script_ast());
         let ast = ast.lock().unwrap();
 
         let first = self

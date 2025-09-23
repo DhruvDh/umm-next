@@ -26,6 +26,10 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
 - Treat the user as the sole gatekeeper for version-control changes. Do not
   apply edits beyond exploratory inspection without explicit approval, and
   confirm proposed code adjustments before modifying files.
+- After presenting a plan (or specific change list), wait for an explicit
+  written sign-off from the user before touching repository files. If approval
+  isn’t recorded in the conversation, assume you do *not* have permission to
+  proceed.
 
 ## 3. During the Task
 

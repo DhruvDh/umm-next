@@ -1,7 +1,10 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Context, Result};
 use async_openai::types::ReasoningEffort;
@@ -41,6 +44,9 @@ pub struct Prompts {
     /// SLO template for testing feedback.
     testing_slo: String,
 }
+
+/// Prompt truncation length for generated feedback payloads.
+pub const PROMPT_TRUNCATE: usize = 60_000;
 
 impl Prompts {
     /// Load prompt templates from disk.
@@ -308,19 +314,21 @@ impl Clone for OpenAiEnv {
 /// Runtime and prompt configuration shared across the crate.
 pub struct Config {
     /// Supabase credentials, if configured.
-    supabase:  Option<SupabaseEnv>,
+    supabase:         Option<SupabaseEnv>,
     /// Lazily constructed Supabase PostgREST client.
-    postgrest: InitCell<Postgrest>,
+    postgrest:        InitCell<Postgrest>,
     /// Shared Tokio runtime for async helpers (downloads, Supabase calls).
-    runtime:   Arc<Runtime>,
+    runtime:          Arc<Runtime>,
     /// Loaded prompt catalog used by graders and retrieval helpers.
-    prompts:   Prompts,
+    prompts:          Prompts,
     /// Course identifier exposed to Supabase-backed endpoints.
-    course:    String,
+    course:           String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
-    term:      String,
+    term:             String,
     /// Cached OpenAI configuration, if available.
-    openai:    Option<OpenAiEnv>,
+    openai:           Option<OpenAiEnv>,
+    /// Flag indicating whether active retrieval is enabled.
+    active_retrieval: AtomicBool,
 }
 
 impl Config {
@@ -349,6 +357,7 @@ impl Config {
             course,
             term,
             openai: OpenAiEnv::from_env(),
+            active_retrieval: AtomicBool::new(false),
         })
     }
 
@@ -389,6 +398,16 @@ impl Config {
     /// are present.
     pub fn openai(&self) -> Option<&OpenAiEnv> {
         self.openai.as_ref()
+    }
+
+    /// Updates the active retrieval toggle.
+    pub fn set_active_retrieval(&self, enabled: bool) {
+        self.active_retrieval.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Returns whether active retrieval is enabled.
+    pub fn active_retrieval_enabled(&self) -> bool {
+        self.active_retrieval.load(Ordering::Relaxed)
     }
 }
 
@@ -440,4 +459,14 @@ pub fn prompts() -> &'static Prompts {
 /// Returns the configured OpenAI environment, if set.
 pub fn openai_config() -> Option<&'static OpenAiEnv> {
     get().openai()
+}
+
+/// Enables or disables active retrieval for context-building helpers.
+pub fn set_active_retrieval(enabled: bool) {
+    get().set_active_retrieval(enabled);
+}
+
+/// Returns whether active retrieval is currently enabled.
+pub fn active_retrieval_enabled() -> bool {
+    get().active_retrieval_enabled()
 }

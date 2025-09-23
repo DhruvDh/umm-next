@@ -11,6 +11,8 @@ pub mod parser;
 pub mod paths;
 /// Java project discovery and operations.
 pub mod project;
+/// Tree-sitter query strings used by Java analysis.
+pub mod queries;
 
 pub use file::{File, FileType, JavaFileError};
 pub use parser::Parser;

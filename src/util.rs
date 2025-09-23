@@ -5,7 +5,6 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
     time::Duration,
 };
 
@@ -16,7 +15,7 @@ use state::InitCell;
 use tokio::io::AsyncWriteExt;
 use which::which;
 
-use crate::{constants::USE_ACTIVE_RETRIEVAL, java::ProjectPaths};
+use crate::{config, java::ProjectPaths};
 
 /// Shared reqwest client configured with CLI-friendly defaults.
 static HTTP_CLIENT: InitCell<Client> = InitCell::new();
@@ -180,11 +179,11 @@ pub async fn download_to_json(url: &str) -> Result<HashMap<String, String>> {
 
 /// Use active retrieval when retrieving context from student submission.
 pub fn use_active_retrieval() {
-    USE_ACTIVE_RETRIEVAL.store(true, Ordering::Relaxed);
+    config::set_active_retrieval(true);
 }
 
 /// Use heuristic based retrieval when retrieving context from student
 /// submission.
 pub fn use_heuristic_retrieval() {
-    USE_ACTIVE_RETRIEVAL.store(false, Ordering::Relaxed);
+    config::set_active_retrieval(false);
 }

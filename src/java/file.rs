@@ -12,13 +12,15 @@ use snailquote::unescape;
 use super::{parser::Parser, paths::ProjectPaths, project::Project};
 use crate::{
     Dict,
-    constants::{
-        CLASS_CONSTRUCTOR_QUERY, CLASS_DECLARATION_QUERY, CLASS_FIELDS_QUERY, CLASS_METHOD_QUERY,
-        CLASSNAME_QUERY, IMPORT_QUERY, INTERFACE_CONSTANTS_QUERY, INTERFACE_DECLARATION_QUERY,
-        INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY, JUNIT_PLATFORM, MAIN_METHOD_QUERY,
-        PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
+    java::{
+        grade::{JavacDiagnostic, LineRef},
+        queries::{
+            CLASS_CONSTRUCTOR_QUERY, CLASS_DECLARATION_QUERY, CLASS_FIELDS_QUERY,
+            CLASS_METHOD_QUERY, CLASSNAME_QUERY, IMPORT_QUERY, INTERFACE_CONSTANTS_QUERY,
+            INTERFACE_DECLARATION_QUERY, INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY,
+            MAIN_METHOD_QUERY, PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
+        },
     },
-    java::grade::{JavacDiagnostic, LineRef},
     parsers::parser,
     util::{classpath, java_path, javac_path, sourcepath},
 };
@@ -569,13 +571,11 @@ impl File {
             }
         };
 
-        let tests = tests
+        let method_selectors = tests
             .iter()
-            .map(|s| format!("-m{s}"))
+            .map(|s| format!("--select-method={s}"))
             .collect::<Vec<String>>();
-        let methods: Vec<&str> = tests.iter().map(String::as_str).collect();
 
-        let junit_jar = self.paths.lib_dir().join(JUNIT_PLATFORM);
         let class_path = classpath(&self.paths)?;
 
         let mut command =
@@ -583,17 +583,20 @@ impl File {
         command.stderr(err).stdout(out).stdin(in_);
 
         command
-            .arg("-jar")
-            .arg(junit_jar)
+            .arg("-cp")
+            .arg(class_path.as_str())
+            .arg("org.junit.platform.console.ConsoleLauncher")
             .arg("--disable-banner")
             .arg("--disable-ansi-colors")
             .arg("--details-theme=unicode")
-            .arg("--single-color")
-            .arg("-cp")
-            .arg(class_path.as_str());
+            .arg("--single-color");
 
-        for method in methods {
-            command.arg(method);
+        if method_selectors.is_empty() {
+            command.arg("--scan-class-path");
+        } else {
+            for selector in method_selectors {
+                command.arg(selector);
+            }
         }
 
         command.output().context("Failed to spawn javac process.")

@@ -2778,7 +2778,6 @@ dependencies = [
  "futures",
  "glob",
  "itertools",
- "lazy_static",
  "openssl",
  "peg",
  "postgrest",

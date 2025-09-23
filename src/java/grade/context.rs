@@ -12,8 +12,7 @@ use serde_json;
 use super::diagnostics::LineRef;
 use crate::{
     Dict, config,
-    constants::{METHOD_CALL_QUERY, PROMPT_TRUNCATE},
-    java::{File, FileType, Parser, Project},
+    java::{File, FileType, Parser, Project, queries::METHOD_CALL_QUERY},
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -339,8 +338,8 @@ pub fn get_source_context<T: Into<LineRef>>(
         });
 
     let mut context = context.join("\n");
-    if context.len() > PROMPT_TRUNCATE {
-        context.truncate(PROMPT_TRUNCATE);
+    if context.len() > config::PROMPT_TRUNCATE {
+        context.truncate(config::PROMPT_TRUNCATE);
         context.push_str("...[TRUNCATED]");
     }
 

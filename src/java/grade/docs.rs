@@ -15,7 +15,6 @@ use super::{
 };
 use crate::{
     config,
-    constants::PROMPT_TRUNCATE,
     java::{JavaFileError, Project},
     parsers::parser,
 };
@@ -218,8 +217,8 @@ impl DocsGrader {
                 .collect::<Vec<String>>()
                 .join("\n\n---\n\n");
 
-            if outputs.len() > PROMPT_TRUNCATE {
-                outputs.truncate(PROMPT_TRUNCATE);
+            if outputs.len() > config::PROMPT_TRUNCATE {
+                outputs.truncate(config::PROMPT_TRUNCATE);
                 outputs.push_str("...[TRUNCATED]");
             }
 

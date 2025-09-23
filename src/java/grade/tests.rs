@@ -19,7 +19,6 @@ use super::{
 };
 use crate::{
     config,
-    constants::{PROMPT_TRUNCATE, active_retrieval_enabled},
     java::{JavaFileError, Project, ProjectPaths},
     parsers::parser,
     util::{classpath, java_path},
@@ -183,8 +182,8 @@ impl ByUnitTestGrader {
 
         let new_user_message = |content: String| {
             let mut content = content;
-            if content.len() > PROMPT_TRUNCATE {
-                content.truncate(PROMPT_TRUNCATE);
+            if content.len() > config::PROMPT_TRUNCATE {
+                content.truncate(config::PROMPT_TRUNCATE);
                 content.push_str("...[TRUNCATED]");
             }
 
@@ -274,7 +273,7 @@ impl ByUnitTestGrader {
                                 3,
                                 6,
                                 6,
-                                active_retrieval_enabled(),
+                                config::active_retrieval_enabled(),
                                 Some(updated_stacktrace.join("\n")),
                             )?,
                         ]);
@@ -548,8 +547,8 @@ impl UnitTestGrader {
                 let mut feedback = ExtendedTable::new(diags).to_string();
                 eprintln!("{feedback}");
 
-                if feedback.len() > PROMPT_TRUNCATE {
-                    feedback.truncate(PROMPT_TRUNCATE);
+                if feedback.len() > config::PROMPT_TRUNCATE {
+                    feedback.truncate(config::PROMPT_TRUNCATE);
                     feedback.push_str("...[TRUNCATED]");
                 }
 
@@ -595,8 +594,8 @@ impl UnitTestGrader {
             ]
             .concat();
             eprintln!("{output}");
-            if output.len() > PROMPT_TRUNCATE {
-                output.truncate(PROMPT_TRUNCATE);
+            if output.len() > config::PROMPT_TRUNCATE {
+                output.truncate(config::PROMPT_TRUNCATE);
                 output.push_str("...[TRUNCATED]");
             }
 
