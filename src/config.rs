@@ -2,7 +2,7 @@
 #![warn(clippy::missing_docs_in_private_items)]
 
 use std::sync::{
-    Arc,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -312,7 +312,7 @@ impl Clone for OpenAiEnv {
 }
 
 /// Runtime and prompt configuration shared across the crate.
-pub struct Config {
+pub struct ConfigState {
     /// Supabase credentials, if configured.
     supabase:         Option<SupabaseEnv>,
     /// Lazily constructed Supabase PostgREST client.
@@ -331,7 +331,7 @@ pub struct Config {
     active_retrieval: AtomicBool,
 }
 
-impl Config {
+impl ConfigState {
     /// Construct a new configuration instance by reading environment and prompt
     /// assets.
     fn new() -> Result<Self> {
@@ -411,24 +411,82 @@ impl Config {
     }
 }
 
-/// Lazily initialized singleton backing the configuration accessors.
-static CONFIG: InitCell<Config> = InitCell::new();
+/// Borrowed view of the prompt catalog that keeps the underlying configuration alive.
+pub struct PromptsRef(ConfigHandle);
 
-/// Ensure the global configuration has been initialized and return a reference
-/// to it.
-pub fn ensure_initialized() -> Result<&'static Config> {
-    if let Some(config) = CONFIG.try_get() {
-        return Ok(config);
+impl std::ops::Deref for PromptsRef {
+    type Target = Prompts;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.prompts
+    }
+}
+
+/// Borrowed view of the OpenAI configuration tied to the global config.
+pub struct OpenAiRef(ConfigHandle);
+
+impl std::ops::Deref for OpenAiRef {
+    type Target = OpenAiEnv;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.openai.as_ref().expect("OpenAI config missing")
+    }
+}
+
+/// Shared configuration handle used throughout the crate.
+#[derive(Clone)]
+pub struct ConfigHandle(Arc<ConfigState>);
+
+impl std::ops::Deref for ConfigHandle {
+    type Target = ConfigState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+static CONFIG_SLOT: OnceLock<Mutex<Option<Arc<ConfigState>>>> = OnceLock::new();
+
+fn slot() -> &'static Mutex<Option<Arc<ConfigState>>> {
+    CONFIG_SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn build_default() -> Result<Arc<ConfigState>> {
+    ConfigState::new().map(|cfg| Arc::new(cfg))
+}
+
+/// Ensure the global configuration has been initialized and return a handle.
+pub fn ensure_initialized() -> Result<ConfigHandle> {
+    let slot = slot();
+    let mut guard = slot.lock().expect("config slot poisoned");
+    if let Some(cfg) = guard.as_ref() {
+        return Ok(ConfigHandle(Arc::clone(cfg)));
     }
 
-    let config = Config::new()?;
-    CONFIG.set(config);
-    Ok(CONFIG.get())
+    let cfg = build_default()?;
+    *guard = Some(Arc::clone(&cfg));
+    Ok(ConfigHandle(cfg))
 }
 
 /// Returns the active configuration, initializing it on demand.
-pub fn get() -> &'static Config {
+pub fn get() -> ConfigHandle {
     ensure_initialized().expect("configuration initialization failed")
+}
+
+#[cfg(test)]
+/// Overrides the global configuration for tests.
+pub fn set_for_tests(cfg: ConfigState) {
+    let slot = slot();
+    let mut guard = slot.lock().expect("config slot poisoned");
+    *guard = Some(Arc::new(cfg));
+}
+
+#[cfg(test)]
+/// Resets the global configuration so the next access re-initializes it.
+pub fn reset_for_tests() {
+    let slot = slot();
+    let mut guard = slot.lock().expect("config slot poisoned");
+    guard.take();
 }
 
 /// Returns the configured PostgREST client, if Supabase has been configured.
@@ -442,23 +500,28 @@ pub fn runtime() -> Arc<Runtime> {
 }
 
 /// Returns the configured course identifier.
-pub fn course() -> &'static str {
-    get().course()
+pub fn course() -> String {
+    get().course.clone()
 }
 
 /// Returns the configured term identifier.
-pub fn term() -> &'static str {
-    get().term()
+pub fn term() -> String {
+    get().term.clone()
 }
 
 /// Returns the configured prompts.
-pub fn prompts() -> &'static Prompts {
-    get().prompts()
+pub fn prompts() -> PromptsRef {
+    PromptsRef(get())
 }
 
 /// Returns the configured OpenAI environment, if set.
-pub fn openai_config() -> Option<&'static OpenAiEnv> {
-    get().openai()
+pub fn openai_config() -> Option<OpenAiRef> {
+    let handle = get();
+    if handle.openai.is_some() {
+        Some(OpenAiRef(handle))
+    } else {
+        None
+    }
 }
 
 /// Enables or disables active retrieval for context-building helpers.

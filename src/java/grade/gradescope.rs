@@ -615,13 +615,13 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
                     &project_title,
                     &project_description,
                     &enabled_slos,
-                    openai_env,
+                    &openai_env,
                 )
                 .await
             })?;
 
             let combined_report = runtime.block_on(async {
-                generate_combined_slo_report(slo_responses, openai_env).await
+                generate_combined_slo_report(slo_responses, &openai_env).await
             })?;
 
             test_cases.push(
