@@ -48,7 +48,7 @@ impl Default for DocsGrader {
 
 impl DocsGrader {
     /// Getter for project
-    pub fn project(&mut self) -> Project {
+    pub fn project(&self) -> Project {
         self.project.clone()
     }
 
@@ -59,7 +59,7 @@ impl DocsGrader {
     }
 
     /// Getter for files
-    pub fn files(&mut self) -> Array {
+    pub fn files(&self) -> Array {
         self.files.clone()
     }
 
@@ -70,7 +70,7 @@ impl DocsGrader {
     }
 
     /// Getter for out_of
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.out_of
     }
 
@@ -81,7 +81,7 @@ impl DocsGrader {
     }
 
     /// Getter for req_name
-    pub fn req_name(&mut self) -> String {
+    pub fn req_name(&self) -> String {
         self.req_name.clone()
     }
 
@@ -92,7 +92,7 @@ impl DocsGrader {
     }
 
     /// Getter for penalty
-    pub fn penalty(&mut self) -> f64 {
+    pub fn penalty(&self) -> f64 {
         self.penalty
     }
 

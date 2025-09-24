@@ -43,7 +43,7 @@ pub struct ByUnitTestGrader {
 
 impl ByUnitTestGrader {
     /// Getter for test_files
-    pub fn test_files(&mut self) -> Array {
+    pub fn test_files(&self) -> Array {
         self.test_files.clone()
     }
 
@@ -54,7 +54,7 @@ impl ByUnitTestGrader {
     }
 
     /// Getter for expected_tests
-    pub fn expected_tests(&mut self) -> Array {
+    pub fn expected_tests(&self) -> Array {
         self.expected_tests.clone()
     }
 
@@ -65,7 +65,7 @@ impl ByUnitTestGrader {
     }
 
     /// Getter for project
-    pub fn project(&mut self) -> Project {
+    pub fn project(&self) -> Project {
         self.project.clone()
     }
 
@@ -76,7 +76,7 @@ impl ByUnitTestGrader {
     }
 
     /// Getter for out_of
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.out_of
     }
 
@@ -87,7 +87,7 @@ impl ByUnitTestGrader {
     }
 
     /// Getter for req_name
-    pub fn req_name(&mut self) -> String {
+    pub fn req_name(&self) -> String {
         self.req_name.clone()
     }
 
@@ -356,32 +356,32 @@ pub struct UnitTestGrader {
 
 impl UnitTestGrader {
     /// A getter for the name of the requirement.
-    pub fn get_req_name(&mut self) -> String {
+    pub fn get_req_name(&self) -> String {
         self.req_name.clone()
     }
 
     /// A getter for the maximum possible grade.
-    pub fn get_out_of(&mut self) -> f64 {
+    pub fn get_out_of(&self) -> f64 {
         self.out_of
     }
 
     /// A getter for the list of test classes to run.
-    pub fn get_target_test(&mut self) -> Array {
+    pub fn get_target_test(&self) -> Array {
         self.target_test.clone()
     }
 
     /// A getter for the list of classes to mutate.
-    pub fn get_target_class(&mut self) -> Array {
+    pub fn get_target_class(&self) -> Array {
         self.target_class.clone()
     }
 
     /// A getter for the list of methods to exclude from mutation.
-    pub fn get_excluded_methods(&mut self) -> Array {
+    pub fn get_excluded_methods(&self) -> Array {
         self.excluded_methods.clone()
     }
 
     /// A getter for the list of classes to avoid mutating.
-    pub fn get_avoid_calls_to(&mut self) -> Array {
+    pub fn get_avoid_calls_to(&self) -> Array {
         self.avoid_calls_to.clone()
     }
 
@@ -422,7 +422,7 @@ impl UnitTestGrader {
     }
 
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
-    pub fn grade_unit_tests(&mut self) -> Result<GradeResult> {
+    pub fn grade_unit_tests(&self) -> Result<GradeResult> {
         let req_name = self.get_req_name();
         let out_of = self.get_out_of();
         let target_test = self.get_target_test();
@@ -655,7 +655,7 @@ pub struct ByHiddenTestGrader {
 
 impl ByHiddenTestGrader {
     /// gets the `url` field.
-    pub fn url(&mut self) -> String {
+    pub fn url(&self) -> String {
         self.url.clone()
     }
 
@@ -666,7 +666,7 @@ impl ByHiddenTestGrader {
     }
 
     /// gets the `test_class_name` field
-    pub fn test_class_name(&mut self) -> String {
+    pub fn test_class_name(&self) -> String {
         self.test_class_name.clone()
     }
 
@@ -677,7 +677,7 @@ impl ByHiddenTestGrader {
     }
 
     /// gets the `out_of` field
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.out_of
     }
 
@@ -688,7 +688,7 @@ impl ByHiddenTestGrader {
     }
 
     /// gets the `req_name` field
-    pub fn req_name(&mut self) -> String {
+    pub fn req_name(&self) -> String {
         self.req_name.clone()
     }
 
@@ -700,7 +700,7 @@ impl ByHiddenTestGrader {
 
     /// Grades using hidden tests. Test file is downloaded, ran, and then
     /// cleaned up before returning.
-    pub fn grade_by_hidden_tests(&mut self) -> Result<GradeResult> {
+    pub fn grade_by_hidden_tests(&self) -> Result<GradeResult> {
         let url = self.url();
         let test_class_name = self.test_class_name();
         let out_of = self.out_of();

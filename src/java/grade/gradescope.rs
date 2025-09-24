@@ -563,7 +563,7 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
         let project = Project::new()?;
         let mut test_cases = vec![];
         for result in results {
-            let mut result = result.clone();
+            let result = result.clone();
 
             let feedback = if gradescope_feedback {
                 generate_single_feedback(&result)?

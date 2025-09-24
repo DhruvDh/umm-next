@@ -32,12 +32,12 @@ impl Grade {
     }
 
     /// a getter for the grade
-    pub fn grade(&mut self) -> f64 {
+    pub fn grade(&self) -> f64 {
         self.grade
     }
 
     /// a getter for the out_of
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.out_of
     }
 
@@ -79,7 +79,7 @@ pub struct GradeResult {
 
 impl GradeResult {
     /// a getter for Requirement
-    pub fn requirement(&mut self) -> String {
+    pub fn requirement(&self) -> String {
         self.requirement.clone()
     }
 
@@ -90,7 +90,7 @@ impl GradeResult {
     }
 
     /// a getter for Reason
-    pub fn reason(&mut self) -> String {
+    pub fn reason(&self) -> String {
         self.reason.clone()
     }
 
@@ -101,12 +101,12 @@ impl GradeResult {
     }
 
     /// a getter for the self.grade.grade
-    pub fn grade(&mut self) -> f64 {
+    pub fn grade(&self) -> f64 {
         self.grade.grade()
     }
 
     /// a getter for the self.grade.out_of
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.grade.out_of()
     }
 
@@ -123,7 +123,7 @@ impl GradeResult {
     }
 
     /// a getter for the prompt
-    pub fn prompt(&mut self) -> Option<Vec<ChatCompletionRequestMessage>> {
+    pub fn prompt(&self) -> Option<Vec<ChatCompletionRequestMessage>> {
         self.prompt.clone()
     }
 

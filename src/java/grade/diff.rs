@@ -41,7 +41,7 @@ impl DiffGrader {
     }
 
     /// gets the `req_name` field
-    pub fn req_name(&mut self) -> String {
+    pub fn req_name(&self) -> String {
         self.req_name.clone()
     }
 
@@ -52,7 +52,7 @@ impl DiffGrader {
     }
 
     /// gets the `out_of` field
-    pub fn out_of(&mut self) -> f64 {
+    pub fn out_of(&self) -> f64 {
         self.out_of
     }
 
@@ -63,7 +63,7 @@ impl DiffGrader {
     }
 
     /// gets the `expected` field
-    pub fn expected(&mut self) -> Array {
+    pub fn expected(&self) -> Array {
         self.expected.clone()
     }
 
@@ -74,7 +74,7 @@ impl DiffGrader {
     }
 
     /// gets the `actual` field
-    pub fn input(&mut self) -> Array {
+    pub fn input(&self) -> Array {
         self.input.clone()
     }
 
@@ -85,7 +85,7 @@ impl DiffGrader {
     }
 
     /// gets the `project` field
-    pub fn project(&mut self) -> Project {
+    pub fn project(&self) -> Project {
         self.project.clone()
     }
 
@@ -96,7 +96,7 @@ impl DiffGrader {
     }
 
     /// gets the `file` field
-    pub fn file(&mut self) -> String {
+    pub fn file(&self) -> String {
         self.file.clone()
     }
 
@@ -107,7 +107,7 @@ impl DiffGrader {
     }
 
     /// gets the `ignore_case` field
-    pub fn ignore_case(&mut self) -> bool {
+    pub fn ignore_case(&self) -> bool {
         self.ignore_case
     }
 
@@ -118,7 +118,7 @@ impl DiffGrader {
     }
 
     /// Grades by diffing the `expected` and `actual` strings.
-    pub fn grade_by_diff(&mut self) -> Result<GradeResult> {
+    pub fn grade_by_diff(&self) -> Result<GradeResult> {
         ensure!(
             !self.expected.is_empty() & !self.input.is_empty(),
             "At least one test case (input-expected pair) must be provided"

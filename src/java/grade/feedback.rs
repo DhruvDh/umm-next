@@ -37,7 +37,7 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         })?;
         let runtime = config::runtime();
         let id = Uuid::new_v4().to_string();
-        let mut result = result.clone();
+        let result = result.clone();
         let body = PromptRow {
             id:               id.clone(),
             messages:         result.prompt(),
