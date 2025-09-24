@@ -72,7 +72,17 @@ impl Parser {
 
     /// A setter for parser's source code
     pub fn set_code(&mut self, code: String) {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&self.lang)
+            .expect("Error loading Java grammar");
+
+        let tree = parser
+            .parse(code.as_str(), None)
+            .expect("Error parsing Java code");
+
         self.code = code;
+        self._tree = Some(tree);
     }
 
     /// Applies a tree sitter query and returns the result as a collection of

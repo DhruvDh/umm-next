@@ -34,6 +34,8 @@ peg::parser! {
             whitespace()?
 
         /// matches any sequence of upper and lowercase alphabets
+        // TODO: support drive letters (e.g., `C:`) by allowing ':' once we have
+        // windows-specific javac fixtures and tests.
         rule word() -> String
             = whitespace()?
                 w:[
