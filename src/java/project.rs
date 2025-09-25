@@ -118,20 +118,16 @@ impl Project {
     /// Returns a short summary of the project, it's files, their fields and
     /// methods.
     pub fn describe(&self) -> String {
-        let mut result = String::new();
-        result.push_str(
-            "> What follows is a summary of the student's submission's files, their fields and \
-             methods generated via treesitter queries.\n\n",
-        );
+        let mut lines = vec!["<project>".to_string()];
 
-        for f in self.files.iter() {
-            if f.proper_name().contains("Hidden") {
+        for file in self.files.iter() {
+            if file.proper_name().contains("Hidden") {
                 continue;
             }
-            result.push_str(f.description().as_str());
-            result.push_str("\n\n");
+            lines.push(file.description());
         }
 
-        result
+        lines.push("</project>".to_string());
+        lines.join("\n")
     }
 }

@@ -24,6 +24,130 @@ use crate::{
     parsers::parser,
     util::{classpath, java_path, javac_path, sourcepath},
 };
+
+/// Normalizes captured snippets by trimming whitespace and flattening newlines.
+fn normalize_entry(entry: &str) -> Option<String> {
+    let trimmed = entry.replace('\n', " ").trim().to_string();
+    if trimmed.is_empty() || trimmed == "[NOT FOUND]" {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Pushes a simple bullet list wrapped in an XML-like tag onto `lines`.
+fn push_block(lines: &mut Vec<String>, tag: &str, items: &[String]) {
+    let entries: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            let trimmed = item.trim();
+            if trimmed.is_empty() || trimmed == "[NOT FOUND]" {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect();
+
+    if entries.is_empty() {
+        return;
+    }
+
+    lines.push(format!("  <{}>", tag));
+    lines.push(String::from("  ```"));
+    for entry in entries {
+        lines.push(format!("  {}", entry));
+    }
+    lines.push(String::from("  ```"));
+    lines.push(format!("  </{}>", tag));
+}
+
+/// Adds a declaration element wrapped in a code fence to protect markup.
+fn push_declaration(lines: &mut Vec<String>, decl: &str) {
+    let trimmed = decl.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    lines.push(String::from("  <declaration>"));
+    lines.push(String::from("  ```"));
+    lines.push(format!("  {}", trimmed));
+    lines.push(String::from("  ```"));
+    lines.push(String::from("  </declaration>"));
+}
+
+/// Builds a readable method signature from tree-sitter captures.
+fn method_signature(data: &Dict) -> String {
+    if data.get("identifier").is_none() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+
+    if let Some(annotation) = data.get("annotation").and_then(|s| normalize_entry(s)) {
+        parts.push(annotation);
+    }
+
+    if let Some(modifier) = data.get("modifier").and_then(|s| normalize_entry(s)) {
+        parts.push(modifier);
+    }
+
+    if let Some(return_type) = data.get("returnType").and_then(|s| normalize_entry(s)) {
+        parts.push(return_type);
+    }
+
+    if let Some(identifier) = data.get("identifier") {
+        let params = data
+            .get("parameters")
+            .map(|p| p.trim().to_string())
+            .unwrap_or_else(|| "()".to_string());
+        parts.push(format!("{}{}", identifier.trim(), params));
+    }
+
+    if let Some(throws) = data.get("throws").and_then(|s| normalize_entry(s)) {
+        parts.push(throws);
+    }
+
+    parts
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Builds a readable constructor signature from tree-sitter captures.
+fn constructor_signature(data: &Dict) -> String {
+    if data.get("identifier").is_none() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+
+    if let Some(annotation) = data.get("annotation").and_then(|s| normalize_entry(s)) {
+        parts.push(annotation);
+    }
+
+    if let Some(modifier) = data.get("modifier").and_then(|s| normalize_entry(s)) {
+        parts.push(modifier);
+    }
+
+    if let Some(identifier) = data.get("identifier") {
+        let params = data
+            .get("parameters")
+            .map(|p| p.trim().to_string())
+            .unwrap_or_else(|| "()".to_string());
+        parts.push(format!("{}{}", identifier.trim(), params));
+    }
+
+    if let Some(throws) = data.get("throws").and_then(|s| normalize_entry(s)) {
+        parts.push(throws);
+    }
+
+    parts
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 /// Types of Java files -
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FileType {
@@ -212,149 +336,112 @@ impl File {
             kind
         };
 
-        let description = match kind {
-            FileType::Interface => {
-                let empty_dict = Dict::new();
-                let empty = String::new();
-                let not_found = String::from("[NOT FOUND]");
+        let file_path = path.display().to_string();
+        let type_attr = match kind {
+            FileType::Interface => "interface",
+            FileType::Class => "class",
+            FileType::ClassWithMain => "class_with_main",
+            FileType::Test => "test",
+        };
 
-                let query_result = parser
+        let empty_dict = Dict::new();
+        let empty = String::new();
+
+        let mut lines = vec![format!(
+            "<file name=\"{proper_name}\" path=\"{file_path}\" type=\"{type_attr}\">"
+        )];
+
+        match kind {
+            FileType::Interface => {
+                let declaration_data = parser
                     .query(INTERFACE_DECLARATION_QUERY)
                     .unwrap_or_default();
-                let declaration = query_result.first().unwrap_or(&empty_dict);
+                let declaration = declaration_data.first().unwrap_or(&empty_dict);
 
                 let parameters = declaration.get("parameters").unwrap_or(&empty).trim();
                 let extends = declaration.get("extends").unwrap_or(&empty).trim();
+                let mut decl = format!("interface {proper_name}");
+                if !parameters.is_empty() {
+                    decl.push(' ');
+                    decl.push_str(parameters);
+                }
+                if !extends.is_empty() {
+                    decl.push(' ');
+                    decl.push_str(extends);
+                }
+                push_declaration(&mut lines, decl.trim());
 
-                let consts = parser
+                let constants = parser
                     .query(INTERFACE_CONSTANTS_QUERY)
                     .unwrap_or_default()
                     .iter()
-                    .map(|c| c.get("constant").unwrap_or(&not_found).to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n");
+                    .filter_map(|c| c.get("constant"))
+                    .filter_map(|s| normalize_entry(s))
+                    .collect::<Vec<_>>();
 
                 let methods = parser
                     .query(INTERFACE_METHODS_QUERY)
                     .unwrap_or_default()
                     .iter()
-                    .map(|m| m.get("signature").unwrap_or(&not_found).to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n");
+                    .filter_map(|m| m.get("signature"))
+                    .filter_map(|s| normalize_entry(s))
+                    .collect::<Vec<_>>();
 
-                let methods = if methods.trim().is_empty() {
-                    String::from("[NOT FOUND]")
-                } else {
-                    methods.trim().to_string()
-                };
-
-                let consts = if consts.trim().is_empty() {
-                    String::from("[NOT FOUND]")
-                } else {
-                    consts.trim().to_string()
-                };
-
-                let mut result = vec![];
-                result.push(format!("Interface: {proper_name} {parameters} {extends}:\n"));
-
-                if !consts.contains("NOT FOUND") {
-                    result.push(String::from("Constants:"));
-                    result.push(consts);
-                }
-                if !methods.contains("NOT FOUND") {
-                    result.push(String::from("Methods:"));
-                    result.push(methods);
-                }
-
-                format!("```\n{r}\n```", r = result.join("\n"))
+                push_block(&mut lines, "constants", &constants);
+                push_block(&mut lines, "methods", &methods);
             }
             _ => {
-                let empty_dict = Dict::new();
-                let empty = String::new();
-                let not_found = String::from("[NOT FOUND]");
-
-                let query_result = parser.query(CLASS_DECLARATION_QUERY).unwrap_or_default();
-                let declaration = query_result.first().unwrap_or(&empty_dict);
+                let declaration_data = parser.query(CLASS_DECLARATION_QUERY).unwrap_or_default();
+                let declaration = declaration_data.first().unwrap_or(&empty_dict);
 
                 let parameters = declaration.get("typeParameters").unwrap_or(&empty).trim();
                 let implements = declaration.get("interfaces").unwrap_or(&empty).trim();
+
+                let mut decl = format!("class {proper_name}");
+                if !parameters.is_empty() {
+                    decl.push(' ');
+                    decl.push_str(parameters);
+                }
+                if !implements.is_empty() {
+                    decl.push(' ');
+                    decl.push_str(implements);
+                }
+                push_declaration(&mut lines, decl.trim());
 
                 let fields = parser
                     .query(CLASS_FIELDS_QUERY)
                     .unwrap_or_default()
                     .iter()
-                    .map(|f| f.get("field").unwrap_or(&not_found).trim().to_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
+                    .filter_map(|f| f.get("field"))
+                    .filter_map(|s| normalize_entry(s))
+                    .collect::<Vec<_>>();
 
-                let methods = parser
-                    .query(CLASS_METHOD_QUERY)
-                    .unwrap_or_default()
+                let constructor_data = parser.query(CLASS_CONSTRUCTOR_QUERY).unwrap_or_default();
+                let constructors = constructor_data
                     .iter()
-                    .map(|m| {
-                        let identifier = m.get("identifier").unwrap_or(&not_found).trim();
-                        let parameters = m.get("parameters").unwrap_or(&empty);
+                    .map(constructor_signature)
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
 
-                        if identifier == not_found.as_str() {
-                            "[NOT FOUND]".to_string()
-                        } else {
-                            format!("{}{}", identifier.trim(), parameters.trim())
-                        }
-                    })
-                    .collect::<Vec<String>>()
-                    .join(", ");
-
-                let constructors = parser
-                    .query(CLASS_CONSTRUCTOR_QUERY)
-                    .unwrap_or_default()
+                let method_data = parser.query(CLASS_METHOD_QUERY).unwrap_or_default();
+                let methods = method_data
                     .iter()
-                    .map(|m| {
-                        let identifier = m.get("identifier").unwrap_or(&not_found).trim();
-                        let parameters = m.get("parameters").unwrap_or(&empty);
+                    .map(method_signature)
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
 
-                        if identifier == not_found.as_str() {
-                            "[NOT FOUND]".to_string()
-                        } else {
-                            format!("{}{}", identifier.trim(), parameters.trim())
-                        }
-                    })
-                    .collect::<Vec<String>>()
-                    .join(", ");
-
-                let fields = if fields.trim().is_empty() {
-                    String::from("[NOT FOUND]")
-                } else {
-                    format!("\tFields: {}", fields)
-                };
-
-                let methods = if methods.trim().is_empty() {
-                    String::from("[NOT FOUND]")
-                } else {
-                    format!("\tMethods: {}", methods)
-                };
-
-                let constructors = if constructors.trim().is_empty() {
-                    String::from("[NOT FOUND]")
-                } else {
-                    format!("\tConstructors: {}", constructors)
-                };
-
-                let mut result = vec![];
-                result.push(format!("Class: {proper_name} {parameters} {implements}:\n"));
-
-                if !fields.contains("NOT FOUND") {
-                    result.push(fields);
-                }
-                if !constructors.contains("NOT FOUND") {
-                    result.push(constructors);
-                }
-                if !methods.contains("NOT FOUND") {
-                    result.push(methods);
-                }
-
-                result.join("\n")
+                push_block(&mut lines, "fields", &fields);
+                push_block(&mut lines, "constructors", &constructors);
+                push_block(&mut lines, "methods", &methods);
             }
-        };
+        }
+
+        if !test_methods.is_empty() {
+            push_block(&mut lines, "tests", &test_methods);
+        }
+
+        lines.push(String::from("</file>"));
+        let description = lines.join("\n");
 
         Ok(Self {
             path: path.to_owned(),
