@@ -1,9 +1,18 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs};
 use futures::{future::join_all, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 
 use super::{file::File, paths::ProjectPaths};
-use crate::{config, util::find_files};
+use crate::{
+    config,
+    java::grade::{
+        LineRef,
+        context::{build_active_retrieval_context, build_heuristic_context},
+    },
+    retrieval::{HeuristicConfig, RetrievalFormatter},
+    util::find_files,
+};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Struct representing a Java project.
 /// Any index `i` in any collection in this struct always refers to the same
@@ -129,5 +138,52 @@ impl Project {
 
         lines.push("</project>".to_string());
         lines.join("\n")
+    }
+}
+
+impl RetrievalFormatter for Project {
+    fn language(&self) -> &'static str {
+        "java"
+    }
+
+    fn full_codebase(&self) -> Result<Vec<ChatCompletionRequestMessage>> {
+        let mut blocks = Vec::new();
+        for file in self.files.iter() {
+            let language = "java";
+            let header = format!(
+                "<file name=\"{}\" path=\"{}\" language=\"{}\">",
+                file.proper_name(),
+                file.path().display(),
+                language
+            );
+            let mut content = vec![header];
+            content.push(String::from("```java"));
+            content.push(file.code().to_string());
+            content.push(String::from("```"));
+            content.push(String::from("</file>"));
+
+            blocks.push(
+                ChatCompletionRequestSystemMessageArgs::default()
+                    .content(content.join("\n"))
+                    .name("Instructor".to_string())
+                    .build()
+                    .context("Failed to build full-codebase message")?
+                    .into(),
+            );
+        }
+
+        Ok(blocks)
+    }
+
+    fn heuristic_context(
+        &self,
+        line_refs: Vec<LineRef>,
+        cfg: HeuristicConfig,
+    ) -> Result<ChatCompletionRequestMessage> {
+        build_heuristic_context(line_refs, self.clone(), cfg)
+    }
+
+    fn active_retrieval(&self, grader_output: String) -> Result<ChatCompletionRequestMessage> {
+        build_active_retrieval_context(self, grader_output)
     }
 }

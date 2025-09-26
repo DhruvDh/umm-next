@@ -12,6 +12,8 @@ use postgrest::Postgrest;
 use state::InitCell;
 use tokio::runtime::Runtime;
 
+use crate::retrieval::HeuristicConfig;
+
 /// Holds prompt strings that will eventually become script-configurable.
 #[derive(Clone)]
 pub struct Prompts {
@@ -314,21 +316,23 @@ impl Clone for OpenAiEnv {
 /// Runtime and prompt configuration shared across the crate.
 pub struct ConfigState {
     /// Supabase credentials, if configured.
-    supabase:         Option<SupabaseEnv>,
+    supabase:            Option<SupabaseEnv>,
     /// Lazily constructed Supabase PostgREST client.
-    postgrest:        InitCell<Postgrest>,
+    postgrest:           InitCell<Postgrest>,
     /// Shared Tokio runtime for async helpers (downloads, Supabase calls).
-    runtime:          Arc<Runtime>,
+    runtime:             Arc<Runtime>,
     /// Loaded prompt catalog used by graders and retrieval helpers.
-    prompts:          Prompts,
+    prompts:             Prompts,
     /// Course identifier exposed to Supabase-backed endpoints.
-    course:           String,
+    course:              String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
-    term:             String,
+    term:                String,
     /// Cached OpenAI configuration, if available.
-    openai:           Option<OpenAiEnv>,
+    openai:              Option<OpenAiEnv>,
     /// Flag indicating whether active retrieval is enabled.
-    active_retrieval: AtomicBool,
+    active_retrieval:    AtomicBool,
+    /// Default heuristic window for snippet-based retrieval.
+    retrieval_heuristic: Mutex<HeuristicConfig>,
 }
 
 impl ConfigState {
@@ -349,6 +353,8 @@ impl ConfigState {
         let course = std::env::var("UMM_COURSE").unwrap_or_else(|_| "ITSC 2214".to_string());
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
 
+        let retrieval_heuristic = Mutex::new(HeuristicConfig::default());
+
         Ok(Self {
             supabase,
             postgrest: InitCell::new(),
@@ -358,6 +364,7 @@ impl ConfigState {
             term,
             openai: OpenAiEnv::from_env(),
             active_retrieval: AtomicBool::new(false),
+            retrieval_heuristic,
         })
     }
 
@@ -408,6 +415,70 @@ impl ConfigState {
     /// Returns whether active retrieval is enabled.
     pub fn active_retrieval_enabled(&self) -> bool {
         self.active_retrieval.load(Ordering::Relaxed)
+    }
+
+    /// Returns the default heuristic configuration for snippet retrieval.
+    pub fn heuristic_defaults(&self) -> HeuristicConfig {
+        *self
+            .retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+    }
+
+    /// Updates the default heuristic configuration for snippet retrieval.
+    pub fn set_heuristic_defaults(&self, cfg: HeuristicConfig) {
+        *self
+            .retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned") = cfg;
+    }
+
+    /// Returns the configured start offset for heuristic retrieval.
+    pub fn heuristic_start_offset(&self) -> usize {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .start_offset()
+    }
+
+    /// Sets the configured start offset for heuristic retrieval.
+    pub fn set_heuristic_start_offset(&self, value: usize) {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .set_start_offset(value);
+    }
+
+    /// Returns the configured number of lines captured after diagnostics.
+    pub fn heuristic_num_lines(&self) -> usize {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .num_lines()
+    }
+
+    /// Sets the configured number of lines captured after diagnostics.
+    pub fn set_heuristic_num_lines(&self, value: usize) {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .set_num_lines(value);
+    }
+
+    /// Returns the configured maximum number of merged diagnostic ranges.
+    pub fn heuristic_max_line_refs(&self) -> usize {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .max_line_refs()
+    }
+
+    /// Sets the configured maximum number of merged diagnostic ranges.
+    pub fn set_heuristic_max_line_refs(&self, value: usize) {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .set_max_line_refs(value);
     }
 }
 
@@ -526,6 +597,46 @@ pub fn openai_config() -> Option<OpenAiRef> {
     } else {
         None
     }
+}
+
+/// Returns the default heuristic retrieval configuration.
+pub fn heuristic_defaults() -> HeuristicConfig {
+    get().heuristic_defaults()
+}
+
+/// Overrides the default heuristic retrieval configuration.
+pub fn set_heuristic_defaults(cfg: HeuristicConfig) {
+    get().set_heuristic_defaults(cfg);
+}
+
+/// Returns the configured heuristic start offset.
+pub fn heuristic_start_offset() -> usize {
+    get().heuristic_start_offset()
+}
+
+/// Sets the configured heuristic start offset.
+pub fn set_heuristic_start_offset(value: usize) {
+    get().set_heuristic_start_offset(value);
+}
+
+/// Returns the configured number of lines captured after diagnostics.
+pub fn heuristic_num_lines() -> usize {
+    get().heuristic_num_lines()
+}
+
+/// Sets the configured number of lines captured after diagnostics.
+pub fn set_heuristic_num_lines(value: usize) {
+    get().set_heuristic_num_lines(value);
+}
+
+/// Returns the configured maximum number of merged diagnostic ranges.
+pub fn heuristic_max_line_refs() -> usize {
+    get().heuristic_max_line_refs()
+}
+
+/// Sets the configured maximum number of merged diagnostic ranges.
+pub fn set_heuristic_max_line_refs(value: usize) {
+    get().set_heuristic_max_line_refs(value);
 }
 
 /// Enables or disables active retrieval for context-building helpers.

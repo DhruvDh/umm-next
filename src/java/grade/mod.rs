@@ -20,8 +20,8 @@ pub mod results;
 /// Unit, mutation, and hidden test graders.
 pub mod tests;
 
-pub use context::{get_active_retrieval_context, get_source_context};
-pub use diagnostics::{JavacDiagnostic, LineRef, MutationDiagnostic};
+pub use context::{build_active_retrieval_context, build_heuristic_context, get_source_context};
+pub use diagnostics::{JavacDiagnostic, MutationDiagnostic};
 pub use diff::DiffGrader;
 pub use docs::DocsGrader;
 pub use feedback::{PromptRow, generate_feedback};
@@ -32,3 +32,5 @@ pub use gradescope::{
 pub use query::{Query, QueryConstraint, QueryError, QueryGrader};
 pub use results::{Grade, GradeResult};
 pub use tests::{ByHiddenTestGrader, ByUnitTestGrader, UnitTestGrader};
+
+pub use crate::types::LineRef;

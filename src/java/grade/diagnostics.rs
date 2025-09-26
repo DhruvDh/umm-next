@@ -2,21 +2,7 @@ use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use typed_builder::TypedBuilder;
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-/// A struct representing a line in a stack trace
-pub struct LineRef {
-    /// The line number
-    pub line_number: usize,
-    /// The file name
-    pub file_name:   String,
-}
-
-impl LineRef {
-    /// Returns the file name
-    pub fn file_name(&self) -> &str {
-        self.file_name.as_ref()
-    }
-}
+use crate::types::LineRef;
 
 #[derive(Tabled, Serialize, Deserialize, TypedBuilder, Clone, Debug)]
 #[builder(field_defaults(setter(into)))]

@@ -6,13 +6,11 @@ use colored::Colorize;
 use rhai::Array;
 use similar::{Algorithm, ChangeTag, utils::diff_unicode_words};
 
-use super::{
-    context::get_source_context,
-    results::{Grade, GradeResult},
-};
+use super::results::{Grade, GradeResult};
 use crate::{
     config,
     java::{JavaFileError, Project},
+    retrieval::build_context_message,
 };
 #[derive(Clone, Default)]
 /// string. Any difference results in a `0` grade.
@@ -160,7 +158,7 @@ impl DiffGrader {
                                 .build()
                                 .context("Failed to build user message")?
                                 .into(),
-                            get_source_context(diags, self.project.clone(), 3, 6, 6, false, None)?,
+                            build_context_message(&self.project, None, diags)?,
                         ];
                         return Ok(GradeResult {
                             requirement: self.req_name.clone(),
@@ -186,7 +184,7 @@ impl DiffGrader {
                                 .build()
                                 .context("Failed to build user message")?
                                 .into(),
-                            get_source_context(diags, self.project.clone(), 3, 6, 6, false, None)?,
+                            build_context_message(&self.project, None, diags)?,
                         ];
                         return Ok(GradeResult {
                             requirement: self.req_name.clone(),

@@ -9,14 +9,12 @@ use tabled::{
     settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
 };
 
-use super::{
-    context::get_source_context,
-    results::{Grade, GradeResult},
-};
+use super::results::{Grade, GradeResult};
 use crate::{
     config,
     java::{JavaFileError, Project},
     parsers::parser,
+    retrieval::build_context_message,
 };
 #[derive(Clone)]
 /// A struct representing arguments to grade_docs function
@@ -134,7 +132,7 @@ impl DocsGrader {
                             .name("Student".to_string())
                             .build()?
                             .into(),
-                        get_source_context(diags, self.project, 1, 3, 6, false, None)?,
+                        build_context_message(&self.project, None, diags)?,
                     ];
 
                     return Ok(GradeResult {
@@ -209,7 +207,7 @@ impl DocsGrader {
         );
 
         let prompt = if num_diags > 0 {
-            let context = get_source_context(all_diags, self.project, 1, 3, 6, false, None)?;
+            let context = build_context_message(&self.project, None, all_diags)?;
 
             let mut outputs = outputs
                 .iter()

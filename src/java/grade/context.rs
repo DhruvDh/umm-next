@@ -10,10 +10,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use super::diagnostics::LineRef;
 use crate::{
     config,
     java::{File, FileType, Parser, Project, queries::METHOD_CALL_QUERY},
+    types::LineRef,
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -329,33 +329,13 @@ fn format_numbered_block(block_lines: &[&str], file_lines: &[&str], width: usize
         .collect::<Vec<_>>()
         .join("\n")
 }
-/// Retrieves the active context for a retrieval operation.
-///
-/// This function takes a reference to a `Project` and an optional `String` as
-/// additional context. It ensures that the additional context is provided when
-/// using active retrieval. It then prepares a series of
-/// `ChatCompletionRequestMessage` and serializes them into a JSON string.
-///
-/// # Arguments
-///
-/// * `proj` - A reference to a `Project`.
-/// * `additional_context` - An optional `String` that provides additional
-///   context for the retrieval operation.
-///
-/// # Returns
-///
-/// * `Result<ChatCompletionRequestMessage>` - A `Result` that contains a
-///   `ChatCompletionRequestMessage` if the operation was successful, or an
-///   `Err` if it was not.
-pub fn get_active_retrieval_context(
+/// Builds an active-retrieval context using the grader output captured from
+/// stdout/stderr.
+pub fn build_active_retrieval_context(
     proj: &Project,
-    active_retrieval_context: Option<String>,
+    grader_output: String,
 ) -> Result<ChatCompletionRequestMessage> {
-    let grader_output = active_retrieval_context
-        .as_deref()
-        .context("Additional context must be provided when using active retrieval.")?;
-
-    let messages = compose_retrieval_messages(proj, grader_output)?;
+    let messages = compose_retrieval_messages(proj, grader_output.as_str())?;
     let response = invoke_retrieval_service(&messages)?.choices[0]
         .message
         .clone();
@@ -402,37 +382,14 @@ pub fn get_active_retrieval_context(
         .into())
 }
 
-/// Returns a ChatCompletionRequestMessage with the given line references that
-/// include contextual lines of code from the source
-///
-/// * `line_refs`: a vector of LineRef objects
-/// * `proj`: a Project object
-/// * `start_offset`: the number of lines of code to include before the line
-/// * `num_lines`: the number of lines of code to include after the line
-/// * `max_line_refs`: the maximum number of _processed_ line references to
-///   include in the final message
-/// * `try_use_active_retrieval`: whether to try to use active retrieval
-/// * `additional_context`: additional context to use for
-pub fn get_source_context<T: Into<LineRef>>(
-    line_refs: Vec<T>,
+/// Builds a heuristic snippet-based context using the provided configuration.
+pub fn build_heuristic_context(
+    line_refs: Vec<LineRef>,
     proj: Project,
-    start_offset: usize,
-    num_lines: usize,
-    max_line_refs: usize,
-    try_use_active_retrieval: bool,
-    active_retrieval_context: Option<String>,
+    cfg: crate::retrieval::HeuristicConfig,
 ) -> Result<ChatCompletionRequestMessage> {
-    if try_use_active_retrieval {
-        match get_active_retrieval_context(&proj, active_retrieval_context) {
-            Ok(message) => return Ok(message),
-            Err(e) => {
-                eprintln!("Failed to get active retrieval context: {e}");
-            }
-        }
-    }
-
-    let expanded = expand_line_refs(line_refs, &proj, start_offset, num_lines)?;
-    let merged = merge_ranges(expanded, num_lines);
+    let expanded = expand_line_refs(line_refs, &proj, cfg.start_offset, cfg.num_lines)?;
+    let merged = merge_ranges(expanded, cfg.num_lines);
 
     let mut context_lines = vec![
         "You cannot see all of the student's submission as you are an AI language model, with \
@@ -442,7 +399,7 @@ pub fn get_source_context<T: Into<LineRef>>(
     ];
     let mut methods = HashSet::new();
 
-    for (file, line_ref, range) in merged.into_iter().take(max_line_refs) {
+    for (file, line_ref, range) in merged.into_iter().take(cfg.max_line_refs) {
         let (mut snippet, snippet_methods) = render_snippet_with_methods(&file, &line_ref, &range)?;
         context_lines.append(&mut snippet);
         methods.extend(snippet_methods);
@@ -461,4 +418,33 @@ pub fn get_source_context<T: Into<LineRef>>(
         .name("Instructor".to_string())
         .build()?
         .into())
+}
+
+/// Backwards-compatible wrapper retaining the pre-refactor API.
+pub fn get_source_context<T: Into<LineRef>>(
+    line_refs: Vec<T>,
+    proj: Project,
+    start_offset: usize,
+    num_lines: usize,
+    max_line_refs: usize,
+    try_use_active_retrieval: bool,
+    active_retrieval_context: Option<String>,
+) -> Result<ChatCompletionRequestMessage> {
+    if try_use_active_retrieval
+        && let Some(ctx) = active_retrieval_context.clone()
+        && let Ok(message) = build_active_retrieval_context(&proj, ctx)
+    {
+        return Ok(message);
+    }
+
+    let line_refs: Vec<LineRef> = line_refs.into_iter().map(Into::into).collect();
+    build_heuristic_context(
+        line_refs,
+        proj,
+        crate::retrieval::HeuristicConfig {
+            start_offset,
+            num_lines,
+            max_line_refs,
+        },
+    )
 }

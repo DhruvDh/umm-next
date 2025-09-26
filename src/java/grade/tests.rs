@@ -13,14 +13,12 @@ use itertools::Itertools;
 use rhai::{Array, Dynamic};
 use tabled::tables::ExtendedTable;
 
-use super::{
-    context::get_source_context,
-    results::{Grade, GradeResult},
-};
+use super::results::{Grade, GradeResult};
 use crate::{
     config,
     java::{JavaFileError, Project, ProjectPaths},
     parsers::parser,
+    retrieval::build_context_message,
     util::{classpath, java_path},
 };
 #[derive(Clone, Default)]
@@ -262,20 +260,13 @@ impl ByUnitTestGrader {
                         let (updated_stacktrace, _) =
                             process_junit_stacktrace(test_results.clone());
 
+                        let grader_output = updated_stacktrace.join("\n");
                         messages.extend(vec![
                             new_user_message(format!(
                                 "Failed tests -\n```\n{}\n```",
-                                updated_stacktrace.join("\n")
+                                grader_output
                             )),
-                            get_source_context(
-                                diags,
-                                project.clone(),
-                                3,
-                                6,
-                                6,
-                                config::active_retrieval_enabled(),
-                                Some(updated_stacktrace.join("\n")),
-                            )?,
+                            build_context_message(&project, Some(grader_output), diags)?,
                         ]);
 
                         test_results
@@ -289,7 +280,7 @@ impl ByUnitTestGrader {
                         let out = format!("Compiler error -\n```\n{}\n```", stacktrace);
                         messages.extend(vec![
                             new_user_message(out.clone()),
-                            get_source_context(diags, project.clone(), 3, 6, 6, false, None)?,
+                            build_context_message(&project, None, diags)?,
                         ]);
                         out
                     }
@@ -297,7 +288,7 @@ impl ByUnitTestGrader {
                         let out = format!("Error at runtime -\n```\n{}\n```", output);
                         messages.extend(vec![
                             new_user_message(out.clone()),
-                            get_source_context(diags, project.clone(), 3, 6, 6, false, None)?,
+                            build_context_message(&project, None, diags)?,
                         ]);
                         out
                     }
@@ -542,7 +533,7 @@ impl UnitTestGrader {
             eprintln!("Problematic mutation test failures printed above.");
 
             let prompt = if num_diags > 0 {
-                let context = get_source_context(diags.clone(), project, 3, 6, 6, false, None)?;
+                let context = build_context_message(&project, None, diags.clone())?;
 
                 let mut feedback = ExtendedTable::new(diags).to_string();
                 eprintln!("{feedback}");

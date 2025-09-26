@@ -19,6 +19,10 @@ pub mod constants;
 pub mod java;
 /// For all parsers used
 pub mod parsers;
+/// Retrieval-mode definitions shared across languages.
+pub mod retrieval;
+/// Shared data structures reused across modules.
+pub mod types;
 /// Utility functions for convenience
 pub mod util;
 use anyhow::{Context, Result};
