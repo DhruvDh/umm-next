@@ -18,7 +18,7 @@ use crate::{
             CLASS_CONSTRUCTOR_QUERY, CLASS_DECLARATION_QUERY, CLASS_FIELDS_QUERY,
             CLASS_METHOD_QUERY, CLASSNAME_QUERY, IMPORT_QUERY, INTERFACE_CONSTANTS_QUERY,
             INTERFACE_DECLARATION_QUERY, INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY,
-            MAIN_METHOD_QUERY, PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
+            MAIN_METHOD_QUERY, METHOD_CALL_QUERY, PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
         },
     },
     parsers::parser,
@@ -806,6 +806,20 @@ impl File {
     /// Borrow the underlying parser.
     pub fn parser(&self) -> &Parser {
         &self.parser
+    }
+
+    /// Returns method invocation names with their 1-based starting line
+    /// numbers.
+    pub fn method_invocations(&self) -> Result<Vec<(String, usize)>> {
+        self.parser
+            .query_capture_positions(METHOD_CALL_QUERY, "name")
+    }
+
+    /// Returns full method bodies matching the provided name with their
+    /// starting line numbers.
+    pub fn method_bodies_named(&self, method_name: &str) -> Result<Vec<(String, usize)>> {
+        let query = format!(include_str!("../queries/method_body_with_name.scm"), method_name);
+        self.parser.query_capture_positions(&query, "body")
     }
 
     /// Returns the source code associated with this file.

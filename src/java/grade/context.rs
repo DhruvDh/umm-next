@@ -1,4 +1,7 @@
-use std::{collections::HashSet, ops::RangeInclusive};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::RangeInclusive,
+};
 
 use anyhow::{Context, Result};
 use async_openai::types::{
@@ -6,15 +9,27 @@ use async_openai::types::{
     ChatCompletionRequestUserMessageArgs, CreateChatCompletionResponse,
 };
 use itertools::Itertools;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
 use crate::{
     config,
-    java::{File, FileType, Parser, Project, queries::METHOD_CALL_QUERY},
+    java::{File, FileType, Project},
     types::LineRef,
 };
+
+#[derive(Debug, Default)]
+/// Numbered snippet lines paired with any method invocations discovered inside
+/// them.
+struct RenderedSnippet {
+    /// Lines ready to be appended to the context buffer (header + code fence +
+    /// numbered code).
+    lines:   Vec<String>,
+    /// Method identifiers captured within the snippet.
+    methods: HashSet<String>,
+}
+
+type MethodsByFile = HashMap<String, HashSet<String>>;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -75,12 +90,13 @@ fn invoke_retrieval_service(
 ) -> Result<CreateChatCompletionResponse> {
     let payload =
         serde_json::to_string(messages).context("Failed to serialize retrieval messages")?;
-    let client = Client::new();
+    let client = config::http_client();
+    let endpoint = config::retrieval_endpoint();
     let runtime = config::runtime();
 
-    runtime.block_on(async {
+    runtime.block_on(async move {
         let response = client
-            .post("https://umm-feedback-openai-func.deno.dev/")
+            .post(endpoint)
             .body(payload)
             .send()
             .await
@@ -155,30 +171,83 @@ fn merge_ranges(
         .collect()
 }
 
-/// Renders a source snippet and returns the method names invoked within it.
-fn render_snippet_with_methods(
+/// Renders a source snippet and returns the numbered lines alongside discovered
+/// method calls.
+fn render_snippet(
     file: &File,
     line_ref: &LineRef,
     range: &RangeInclusive<usize>,
-) -> Result<(Vec<String>, HashSet<String>)> {
-    let mut block = Vec::new();
+    full_file_ratio: f32,
+) -> Result<RenderedSnippet> {
     let total_lines = file.code().lines().count();
 
     if total_lines == 0 {
-        block.push(format!(
-            "- Lines {} to {} from {} -\n```",
+        let mut lines = Vec::with_capacity(2);
+        lines.push(format!(
+            "- Lines {} to {} from {} -",
             range.start(),
             range.end(),
             line_ref.file_name
         ));
-        block.push("```".to_string());
-        return Ok((block, HashSet::new()));
+        lines.push("```".to_string());
+        lines.push("```".to_string());
+        return Ok(RenderedSnippet {
+            lines,
+            methods: HashSet::new(),
+        });
+    }
+
+    let (start, end) = compute_snippet_bounds(total_lines, range, full_file_ratio);
+    let header = format!("- Lines {} to {} from {} -", start, end, line_ref.file_name);
+
+    let file_lines: Vec<&str> = file.code().lines().collect();
+    let snippet_lines = &file_lines[start..=end];
+    let width = line_number_width(total_lines);
+    let numbered_lines = format_numbered_snippet_lines(snippet_lines, start, width);
+
+    let mut lines = Vec::with_capacity(numbered_lines.len() + 3);
+    lines.push(header);
+    lines.push("```".to_string());
+    lines.extend(numbered_lines);
+    lines.push("```".to_string());
+
+    let methods = file
+        .method_invocations()?
+        .into_iter()
+        .filter_map(|(name, line)| {
+            let zero_based = line.saturating_sub(1);
+            if zero_based >= start && zero_based <= end {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(RenderedSnippet { lines, methods })
+}
+
+/// Normalises an inclusive line range so it fits within the file and applies
+/// the "full file" heuristic when the requested range covers most of the
+/// source.
+fn compute_snippet_bounds(
+    total_lines: usize,
+    range: &RangeInclusive<usize>,
+    full_file_ratio: f32,
+) -> (usize, usize) {
+    if total_lines == 0 {
+        return (0, 0);
     }
 
     let mut start = *range.start();
     let mut end = *range.end();
-    let snippet_len = if end >= start { end - start + 1 } else { 0 };
-    if (snippet_len as f32) >= 0.6 * (total_lines as f32) {
+
+    if end < start {
+        end = start;
+    }
+
+    let snippet_len = end.saturating_sub(start) + 1;
+    if (snippet_len as f32) >= full_file_ratio * (total_lines as f32) {
         start = 0;
         end = total_lines.saturating_sub(1);
     }
@@ -193,139 +262,111 @@ fn render_snippet_with_methods(
         end = start;
     }
 
-    block.push(format!("- Lines {} to {} from {} -\n```", start, end, line_ref.file_name));
+    (start, end)
+}
 
-    let width = line_number_width(total_lines);
-    let file_lines: Vec<&str> = file.code().lines().collect();
-    let raw_lines: Vec<&str> = file_lines
-        .iter()
-        .skip(start)
-        .take(end - start + 1)
-        .copied()
-        .collect();
-
-    let sanitized_lines: Vec<String> = raw_lines
+/// Renders the snippet lines with left-padded line numbers for display inside a
+/// code fence.
+fn format_numbered_snippet_lines(
+    snippet_lines: &[&str],
+    start_line: usize,
+    width: usize,
+) -> Vec<String> {
+    snippet_lines
         .iter()
         .enumerate()
-        .map(|(idx, line)| {
-            let sanitized = line.replace("\\\\", "\\").replace("\\\"", "\"");
-            format!("{:width$}|{}", start + idx, sanitized)
-        })
-        .collect();
-
-    block.extend(sanitized_lines.clone());
-    block.push("```".to_string());
-
-    let snippet_source = raw_lines.join("\n");
-    let method_names = collect_method_names(&snippet_source)?;
-
-    Ok((block, method_names))
+        .map(|(idx, line)| format!("{:width$}|{}", start_line + idx, sanitize_snippet_line(line)))
+        .collect()
 }
 
-/// Collects method invocation identifiers from a rendered snippet.
-fn collect_method_names(source: &str) -> Result<HashSet<String>> {
-    // TODO: replace snippet reparsing with node-based queries once Rune tests
-    // exist.
-    let parser =
-        Parser::new(source.to_string()).context("Failed to parse snippet for method calls")?;
-    let matches = parser
-        .query(METHOD_CALL_QUERY)
-        .context("Failed to execute method call query")?;
+/// Reverts escaping introduced by javac diagnostics so the snippet reflects the
+/// original source.
+fn sanitize_snippet_line(line: &str) -> String {
+    line.replace("\\\\", "\\").replace("\\\"", "\"")
+}
 
-    let mut methods = HashSet::new();
-    for capture in matches {
-        if let Some(name) = capture.get("name") {
-            methods.insert(name.to_string());
+/// Aggregates snippet lines and captured method names grouped by file.
+fn build_snippet_sections(
+    merged: Vec<(File, LineRef, RangeInclusive<usize>)>,
+    cfg: crate::retrieval::HeuristicConfig,
+) -> Result<(Vec<String>, MethodsByFile)> {
+    let mut lines = Vec::new();
+    let mut methods_by_file: MethodsByFile = HashMap::new();
+
+    for (file, line_ref, range) in merged.into_iter().take(cfg.max_line_refs) {
+        let rendered = render_snippet(&file, &line_ref, &range, cfg.full_file_ratio)?;
+        lines.extend(rendered.lines);
+        if !rendered.methods.is_empty() {
+            methods_by_file
+                .entry(file.proper_name())
+                .or_default()
+                .extend(rendered.methods);
         }
     }
-    Ok(methods)
+
+    Ok((lines, methods_by_file))
 }
 
-/// Appends method bodies for the provided method names to the context buffer.
-fn append_method_bodies(
+/// Gathers method body sections for the provided method names, grouped by file.
+fn collect_method_body_sections(
     proj: &Project,
-    method_names: &HashSet<String>,
-    context: &mut Vec<String>,
-) -> Result<()> {
-    if method_names.is_empty() {
-        return Ok(());
+    methods_by_file: &MethodsByFile,
+) -> Result<Vec<String>> {
+    if methods_by_file.is_empty() {
+        return Ok(Vec::new());
     }
 
+    let mut sections = Vec::new();
     let mut seen = HashSet::new();
-    for method_name in method_names {
-        let query = format!(include_str!("../../queries/method_body_with_name.scm"), method_name);
 
-        for file in proj.files() {
-            if !matches!(file.kind(), FileType::Class | FileType::ClassWithMain) {
-                continue;
-            }
-
-            let results = file.query(&query).with_context(|| {
-                format!("Failed to query method body in {}", file.proper_name())
+    for (proper_name, methods) in methods_by_file {
+        let file = proj
+            .files()
+            .iter()
+            .find(|f| f.proper_name() == *proper_name)
+            .with_context(|| {
+                format!("File {proper_name} not found when gathering method bodies")
             })?;
 
-            if results.is_empty() {
-                continue;
-            }
+        let width = line_number_width(file.code().lines().count());
 
-            let file_lines: Vec<&str> = file.code().lines().collect();
-            let width = line_number_width(file_lines.len());
+        for method_name in methods {
+            let bodies = file
+                .method_bodies_named(method_name)
+                .with_context(|| format!("Failed to query method body in {proper_name}"))?;
 
-            for capture in results {
-                let body = match capture.get("body") {
-                    Some(body) => body,
-                    None => continue,
-                };
-
-                if !seen.insert((file.proper_name(), method_name.clone())) {
+            for (body, start_line) in bodies {
+                if !seen.insert((proper_name.clone(), method_name.clone())) {
                     continue;
                 }
 
-                let body_lines: Vec<&str> = body.lines().collect();
-                if body_lines.is_empty() {
-                    continue;
-                }
-
-                let formatted = format_numbered_block(&body_lines, &file_lines, width);
-                context.push(format!(
-                    "Method body from student's submission `{}#{}`:",
-                    file.proper_name(),
-                    method_name
+                let formatted = format_numbered_block(body.as_str(), start_line, width);
+                sections.push(format!(
+                    "Method body from student's submission `{proper_name}#{method_name}`:"
                 ));
-                context.push(format!("\n```\n{}\n```\n", formatted));
+                sections.push(format!("\n```\n{}\n```\n", formatted));
             }
         }
     }
 
-    Ok(())
+    Ok(sections)
 }
 
 /// Calculates the width required to display line numbers for a file.
 fn line_number_width(total_lines: usize) -> usize {
     if total_lines == 0 {
-        1
-    } else {
-        (total_lines as f32).log10().ceil() as usize
+        return 1;
     }
+
+    let width = (total_lines as f32).log10().ceil() as usize;
+    width.max(1)
 }
 
 /// Formats a block of source lines with prefixed line numbers.
-fn format_numbered_block(block_lines: &[&str], file_lines: &[&str], width: usize) -> String {
-    let start_line_number = block_lines
-        .first()
-        .and_then(|first_line| {
-            let trimmed = first_line.trim();
-            file_lines
-                .iter()
-                .position(|line| line.contains(trimmed))
-                .map(|idx| idx + 1)
-        })
-        .unwrap_or(1);
-
-    block_lines
-        .iter()
+fn format_numbered_block(body: &str, start_line: usize, width: usize) -> String {
+    body.lines()
         .enumerate()
-        .map(|(idx, line)| format!("{:width$}|{}", start_line_number + idx, line))
+        .map(|(idx, line)| format!("{:width$}|{}", start_line + idx, line))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -336,14 +377,17 @@ pub fn build_active_retrieval_context(
     grader_output: String,
 ) -> Result<ChatCompletionRequestMessage> {
     let messages = compose_retrieval_messages(proj, grader_output.as_str())?;
-    let response = invoke_retrieval_service(&messages)?.choices[0]
-        .message
-        .clone();
+    let response = invoke_retrieval_service(&messages)?;
+    let choice = response
+        .choices
+        .first()
+        .context("Retrieval service returned no choices")?;
+    let response_message = choice.message.clone();
 
-    let tool_calls = response
+    let tool_calls = response_message
         .tool_calls
         .as_ref()
-        .context("No function call found in response.")?;
+        .context("No function call found in response message")?;
     let function_call = tool_calls.first().context("Function call list was empty")?;
     let args = &function_call.function.arguments;
     let function_call_args: RetrievalFunctionCallParamsArray =
@@ -391,21 +435,18 @@ pub fn build_heuristic_context(
     let expanded = expand_line_refs(line_refs, &proj, cfg.start_offset, cfg.num_lines)?;
     let merged = merge_ranges(expanded, cfg.num_lines);
 
-    let mut context_lines = vec![
-        "You cannot see all of the student's submission as you are an AI language model, with \
-         limited context length. Here are some snippets of code the stacktrace indicates might be \
-         relevant:\n"
-            .to_string(),
-    ];
-    let mut methods = HashSet::new();
+    let intro = "You cannot see all of the student's submission as you are an AI language model, \
+                 with limited context length. Here are some snippets of code the stacktrace \
+                 indicates might be relevant:\n"
+        .to_string();
 
-    for (file, line_ref, range) in merged.into_iter().take(cfg.max_line_refs) {
-        let (mut snippet, snippet_methods) = render_snippet_with_methods(&file, &line_ref, &range)?;
-        context_lines.append(&mut snippet);
-        methods.extend(snippet_methods);
-    }
+    let (snippet_lines, method_map) = build_snippet_sections(merged, cfg)?;
+    let method_sections = collect_method_body_sections(&proj, &method_map)?;
 
-    append_method_bodies(&proj, &methods, &mut context_lines)?;
+    let mut context_lines = Vec::with_capacity(1 + snippet_lines.len() + method_sections.len());
+    context_lines.push(intro);
+    context_lines.extend(snippet_lines);
+    context_lines.extend(method_sections);
 
     let mut context = context_lines.join("\n");
     if context.len() > config::PROMPT_TRUNCATE {
@@ -445,6 +486,163 @@ pub fn get_source_context<T: Into<LineRef>>(
             start_offset,
             num_lines,
             max_line_refs,
+            full_file_ratio: config::heuristic_full_file_ratio(),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+    };
+
+    use async_openai::types::{
+        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageContent,
+        ChatCompletionRequestSystemMessageContentPart,
+    };
+
+    use super::*;
+    use crate::{java::ProjectPaths, retrieval::HeuristicConfig};
+
+    fn system_content_to_string(content: ChatCompletionRequestSystemMessageContent) -> String {
+        match content {
+            ChatCompletionRequestSystemMessageContent::Text(text) => text,
+            ChatCompletionRequestSystemMessageContent::Array(parts) => parts
+                .into_iter()
+                .map(|part| match part {
+                    ChatCompletionRequestSystemMessageContentPart::Text(text_part) => {
+                        text_part.text
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
+
+    fn load_fixture_project(fixture: &str) -> Project {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/java")
+            .join(fixture);
+        let paths = ProjectPaths::new(root);
+        Project::from_paths_for_tests(paths).expect("failed to load fixture project")
+    }
+
+    #[test]
+    fn heuristic_context_emits_snippet_with_numbering() {
+        let project = load_fixture_project("arraylist-example-solution");
+        let line_ref = LineRef {
+            file_name:   "DataStructures.ArrayList".to_string(),
+            line_number: 107,
+        };
+        let config = HeuristicConfig {
+            start_offset:    2,
+            num_lines:       6,
+            max_line_refs:   2,
+            full_file_ratio: 0.6,
+        };
+
+        let message = build_heuristic_context(vec![line_ref], project, config)
+            .expect("failed to build heuristic context");
+
+        let ChatCompletionRequestMessage::System(system_message) = message else {
+            panic!("expected system message");
+        };
+
+        let content = system_content_to_string(system_message.content);
+        assert!(content.contains("You cannot see all of the student's submission"));
+        assert!(content.contains("DataStructures.ArrayList"));
+        assert!(content.contains("return remove(0);"));
+        assert!(content.contains("throw new NoSuchElementException(\"List is empty.\");"));
+        assert!(content.contains("101|  public T removeFirst()"));
+    }
+
+    #[test]
+    fn snippet_bounds_clamped_when_range_exceeds_file() {
+        let bounds = compute_snippet_bounds(10, &(15..=15), 0.6);
+        assert_eq!(bounds, (9, 9));
+    }
+
+    #[test]
+    fn snippet_bounds_expand_to_full_file_when_threshold_exceeded() {
+        let bounds = compute_snippet_bounds(20, &(0..=19), 0.6);
+        assert_eq!(bounds, (0, 19));
+    }
+
+    #[test]
+    fn collect_method_sections_includes_each_method_once() {
+        let project = load_fixture_project("arraylist-example-solution");
+        let mut methods = HashSet::new();
+        methods.insert("remove".to_string());
+        let mut map = HashMap::new();
+        map.insert("DataStructures.ArrayList".to_string(), methods);
+
+        let sections = collect_method_body_sections(&project, &map).expect("method sections");
+        let message_count = sections
+            .iter()
+            .filter(|line| line.contains("Method body from student's submission `"))
+            .count();
+        assert_eq!(message_count, 1, "expected exactly one method body header");
+        assert!(
+            sections
+                .iter()
+                .any(|line| line.contains("ArrayList#remove"))
+        );
+    }
+
+    #[test]
+    fn render_snippet_includes_invocations_on_range_edges() {
+        let project = load_fixture_project("arraylist-example-solution");
+        let file = project
+            .identify("DataStructures.ArrayList")
+            .expect("fixture file");
+        let range = 102..=108;
+        let rendered = render_snippet(
+            &file,
+            &LineRef {
+                file_name:   file.proper_name(),
+                line_number: 107,
+            },
+            &range,
+            0.6,
+        )
+        .expect("render snippet");
+        assert!(rendered.methods.contains("remove"));
+        assert!(rendered.methods.contains("isEmpty"));
+    }
+
+    #[test]
+    fn method_sections_preserve_capture_line_numbers() {
+        let project = load_fixture_project("arraylist-example-solution");
+        let mut methods = HashSet::new();
+        methods.insert("removeFirst".to_string());
+        let mut map = HashMap::new();
+        map.insert("DataStructures.ArrayList".to_string(), methods);
+
+        let sections = collect_method_body_sections(&project, &map).expect("method sections");
+        let header_index = sections
+            .iter()
+            .position(|line| {
+                line.contains(
+                    "Method body from student's submission `DataStructures.ArrayList#removeFirst`",
+                )
+            })
+            .expect("method header present");
+        let body_block = &sections[header_index + 1];
+        let expected_start = project
+            .identify("DataStructures.ArrayList")
+            .expect("fixture file")
+            .method_bodies_named("removeFirst")
+            .expect("method body lookup")
+            .first()
+            .map(|(_, line)| *line)
+            .expect("method body line");
+        assert!(
+            body_block.starts_with(&format!("\n```\n{}|", expected_start)),
+            "expected body to start with numbered line {} but saw {}",
+            expected_start,
+            body_block
+        );
+    }
 }

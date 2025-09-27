@@ -33,19 +33,23 @@ impl RetrievalMode {
 #[derive(Debug, Clone, Copy)]
 pub struct HeuristicConfig {
     /// Number of lines to include before the diagnostic line.
-    pub start_offset:  usize,
+    pub start_offset:    usize,
     /// Number of lines to include after the diagnostic line.
-    pub num_lines:     usize,
+    pub num_lines:       usize,
     /// Maximum number of merged line references to include.
-    pub max_line_refs: usize,
+    pub max_line_refs:   usize,
+    /// Ratio of file length that triggers full-file rendering instead of a
+    /// snippet.
+    pub full_file_ratio: f32,
 }
 
 impl Default for HeuristicConfig {
     fn default() -> Self {
         Self {
-            start_offset:  3,
-            num_lines:     6,
-            max_line_refs: 6,
+            start_offset:    3,
+            num_lines:       6,
+            max_line_refs:   6,
+            full_file_ratio: 0.6,
         }
     }
 }
@@ -79,6 +83,16 @@ impl HeuristicConfig {
     /// Updates the maximum number of merged line references included.
     pub fn set_max_line_refs(&mut self, value: usize) {
         self.max_line_refs = value;
+    }
+
+    /// Returns the ratio used to decide when to render the full file.
+    pub fn full_file_ratio(&self) -> f32 {
+        self.full_file_ratio
+    }
+
+    /// Updates the ratio used to decide when to render the full file.
+    pub fn set_full_file_ratio(&mut self, value: f32) {
+        self.full_file_ratio = value;
     }
 }
 

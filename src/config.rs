@@ -9,6 +9,7 @@ use std::sync::{
 use anyhow::{Context, Result};
 use async_openai::types::ReasoningEffort;
 use postgrest::Postgrest;
+use reqwest::Client;
 use state::InitCell;
 use tokio::runtime::Runtime;
 
@@ -319,6 +320,8 @@ pub struct ConfigState {
     supabase:            Option<SupabaseEnv>,
     /// Lazily constructed Supabase PostgREST client.
     postgrest:           InitCell<Postgrest>,
+    /// Shared reqwest HTTP client reused across network helpers.
+    http_client:         Client,
     /// Shared Tokio runtime for async helpers (downloads, Supabase calls).
     runtime:             Arc<Runtime>,
     /// Loaded prompt catalog used by graders and retrieval helpers.
@@ -333,6 +336,8 @@ pub struct ConfigState {
     active_retrieval:    AtomicBool,
     /// Default heuristic window for snippet-based retrieval.
     retrieval_heuristic: Mutex<HeuristicConfig>,
+    /// Endpoint used for active-retrieval service calls.
+    retrieval_endpoint:  String,
 }
 
 impl ConfigState {
@@ -348,16 +353,26 @@ impl ConfigState {
             };
 
         let runtime = Runtime::new().context("Failed to create shared Tokio runtime")?;
+        let http_client = Client::builder()
+            // Avoid macOS dynamic store lookups that fail in sandboxed environments.
+            .no_proxy()
+            .build()
+            .context("Failed to construct shared HTTP client")?;
         let prompts = Prompts::load();
 
         let course = std::env::var("UMM_COURSE").unwrap_or_else(|_| "ITSC 2214".to_string());
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
+
+        let retrieval_endpoint = std::env::var("UMM_RETRIEVAL_ENDPOINT")
+            .map(|value| value.trim().to_owned())
+            .unwrap_or_else(|_| "https://umm-feedback-openai-func.deno.dev/".to_string());
 
         let retrieval_heuristic = Mutex::new(HeuristicConfig::default());
 
         Ok(Self {
             supabase,
             postgrest: InitCell::new(),
+            http_client,
             runtime: Arc::new(runtime),
             prompts,
             course,
@@ -365,6 +380,7 @@ impl ConfigState {
             openai: OpenAiEnv::from_env(),
             active_retrieval: AtomicBool::new(false),
             retrieval_heuristic,
+            retrieval_endpoint,
         })
     }
 
@@ -384,6 +400,16 @@ impl ConfigState {
     /// Returns the shared Tokio runtime.
     pub fn runtime(&self) -> Arc<Runtime> {
         self.runtime.clone()
+    }
+
+    /// Returns a clone of the shared reqwest HTTP client.
+    pub fn http_client(&self) -> Client {
+        self.http_client.clone()
+    }
+
+    /// Returns the configured retrieval endpoint.
+    pub fn retrieval_endpoint(&self) -> &str {
+        &self.retrieval_endpoint
     }
 
     /// Returns the course identifier.
@@ -480,6 +506,22 @@ impl ConfigState {
             .expect("retrieval heuristic poisoned")
             .set_max_line_refs(value);
     }
+
+    /// Returns the ratio used to trigger full-file snippet rendering.
+    pub fn heuristic_full_file_ratio(&self) -> f32 {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .full_file_ratio()
+    }
+
+    /// Sets the ratio used to trigger full-file snippet rendering.
+    pub fn set_heuristic_full_file_ratio(&self, value: f32) {
+        self.retrieval_heuristic
+            .lock()
+            .expect("retrieval heuristic poisoned")
+            .set_full_file_ratio(value);
+    }
 }
 
 /// Borrowed view of the prompt catalog that keeps the underlying configuration
@@ -574,6 +616,16 @@ pub fn runtime() -> Arc<Runtime> {
     get().runtime()
 }
 
+/// Returns a clone of the shared reqwest HTTP client.
+pub fn http_client() -> Client {
+    get().http_client()
+}
+
+/// Returns the configured retrieval endpoint.
+pub fn retrieval_endpoint() -> String {
+    get().retrieval_endpoint().to_string()
+}
+
 /// Returns the configured course identifier.
 pub fn course() -> String {
     get().course.clone()
@@ -637,6 +689,16 @@ pub fn heuristic_max_line_refs() -> usize {
 /// Sets the configured maximum number of merged diagnostic ranges.
 pub fn set_heuristic_max_line_refs(value: usize) {
     get().set_heuristic_max_line_refs(value);
+}
+
+/// Returns the configured full-file snippet ratio.
+pub fn heuristic_full_file_ratio() -> f32 {
+    get().heuristic_full_file_ratio()
+}
+
+/// Sets the configured full-file snippet ratio.
+pub fn set_heuristic_full_file_ratio(value: f32) {
+    get().set_heuristic_full_file_ratio(value);
 }
 
 /// Enables or disables active retrieval for context-building helpers.

@@ -30,9 +30,13 @@ impl Project {
     /// Initializes a Project by discovering Java files in the
     /// [struct@UMM_DIR] directory and preparing metadata for later operations.
     pub fn new() -> Result<Self> {
+        Self::from_paths(ProjectPaths::default())
+    }
+
+    /// Core implementation that discovers files for the provided paths.
+    fn from_paths(paths: ProjectPaths) -> Result<Self> {
         let mut files = vec![];
         let mut names = vec![];
-        let paths = ProjectPaths::default();
 
         let runtime = config::runtime();
         let rt = runtime.handle().clone();
@@ -62,13 +66,16 @@ impl Project {
             files.push(file);
         }
 
-        let proj = Self {
+        Ok(Self {
             files,
             names,
-            paths: paths.clone(),
-        };
+            paths,
+        })
+    }
 
-        Ok(proj)
+    #[cfg(test)]
+    pub(crate) fn from_paths_for_tests(paths: ProjectPaths) -> Result<Self> {
+        Self::from_paths(paths)
     }
 
     /// Attempts to identify the correct file from the project from a partial or

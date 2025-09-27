@@ -1,6 +1,6 @@
 use std::fmt::Formatter;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::Dict;
@@ -134,6 +134,41 @@ impl Parser {
                 result.insert(name.to_string(), value.to_string());
             }
             results.push(result);
+        }
+
+        Ok(results)
+    }
+
+    /// Returns the text and 1-based starting line number for each occurrence of
+    /// the requested capture in the supplied query.
+    pub fn query_capture_positions(
+        &self,
+        q: &str,
+        capture_name: &str,
+    ) -> Result<Vec<(String, usize)>> {
+        let tree = self
+            ._tree
+            .as_ref()
+            .context("Treesitter could not parse code")?;
+
+        let query = Query::new(&self.lang, q).unwrap();
+        let capture_index = query
+            .capture_index_for_name(capture_name)
+            .ok_or_else(|| anyhow!("Capture name {capture_name} not present in query"))?;
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), self.code.as_bytes());
+        let mut results = Vec::new();
+
+        while let Some(m) = matches.next() {
+            for capture in m.captures.iter().filter(|c| c.index == capture_index) {
+                let text = capture
+                    .node
+                    .utf8_text(self.code.as_bytes())
+                    .context("Cannot map capture to source text")?;
+                let line = capture.node.start_position().row + 1; // 1-based
+                results.push((text.to_string(), line));
+            }
         }
 
         Ok(results)
