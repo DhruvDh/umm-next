@@ -2,3 +2,9 @@
 	path = docs
 	url = https://github.com/DhruvDh/umm_docs.git
 	branch = main
+[submodule "fixtures/java/arraylist-example"]
+	path = fixtures/java/arraylist-example
+	url = https://github.com/Charlotte-CCI-ICC/1213-arraylist-example
+[submodule "fixtures/java/arraylist-example-solution"]
+	path = fixtures/java/arraylist-example-solution
+	url = https://github.com/Charlotte-CCI-ICC/1213-arraylist-example
