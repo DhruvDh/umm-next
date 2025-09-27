@@ -11,6 +11,7 @@ rustc-ice-*
 # Added by cargo
 
 target
+.venv
 
 # Untrack PLAN doc
 PLAN.md

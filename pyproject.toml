@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.6,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "umm"
+description = "Python bindings for the UMM Java autograder"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "UMM Maintainers" }]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/DhruvDh/umm"
+
+[tool.maturin]
+features = ["python"]
+module-name = "umm"
+strip = true

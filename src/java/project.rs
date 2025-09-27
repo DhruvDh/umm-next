@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, bail};
 use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs};
 use futures::{future::join_all, stream::FuturesUnordered};
@@ -31,6 +33,11 @@ impl Project {
     /// [struct@UMM_DIR] directory and preparing metadata for later operations.
     pub fn new() -> Result<Self> {
         Self::from_paths(ProjectPaths::default())
+    }
+
+    /// Initializes a project rooted at the provided directory path.
+    pub fn from_root<P: Into<PathBuf>>(root: P) -> Result<Self> {
+        Self::from_paths(ProjectPaths::new(root.into()))
     }
 
     /// Core implementation that discovers files for the provided paths.

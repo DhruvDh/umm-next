@@ -1,0 +1,9 @@
+implementation=CPython
+version=3.13
+shared=true
+abi3=true
+executable=/opt/homebrew/opt/python@3.13/bin/python3
+pointer_width=64
+suppress_build_script_link_lines=true
+extra_build_script_line=cargo:rustc-link-arg=-undefined
+extra_build_script_line=cargo:rustc-link-arg=dynamic_lookup

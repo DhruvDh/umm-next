@@ -19,6 +19,9 @@ pub mod constants;
 pub mod java;
 /// For all parsers used
 pub mod parsers;
+/// Python bindings exposed via PyO3 when the `python` feature is enabled.
+#[cfg(feature = "python")]
+pub mod python;
 /// Retrieval-mode definitions shared across languages.
 pub mod retrieval;
 /// Shared data structures reused across modules.

@@ -9,6 +9,13 @@ license = "MIT"
 description = "A java build tool and scriptable autograder that generates feedback."
 repository = "https://github.com/DhruvDh/umm"
 
+[features]
+default = []
+python = ["pyo3"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -46,6 +53,11 @@ similar = { version = "2.4.0", features = [
 colored = "3.0.0"
 itertools = "0.14.0"
 thiserror = "2.0.16"
+# PyO3 bindings are optional and gated behind the `python` feature.
+pyo3 = { version = "0.26.0", features = [
+  "extension-module",
+  "abi3-py39",
+], optional = true }
 # comrak = { version = "0.21.0", features = [
 #   "shell-words",
 #   "syntect",
@@ -56,6 +68,9 @@ thiserror = "2.0.16"
 # ] }
 axum = "0.8.4"
 state = "0.6.0"
+
+[build-dependencies]
+pyo3-build-config = { version = "0.26.0", features = ["resolve-config"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 openssl = { version = "0.10.63", features = ["vendored"] }
