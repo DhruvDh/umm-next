@@ -94,12 +94,13 @@ peg::parser! {
             {
                 let p = std::path::PathBuf::from(p);
             let name = p.file_name().expect("Could not parse path to file in javac error/warning");
+            let display_path = format!(".{}", p.display());
 
             JavacDiagnostic::builder()
-                .path(format!(".{}", p.display()))
+                .path(display_path)
                 .file_name(name.to_string_lossy().to_string())
+                .severity(d)
                 .line_number(l)
-                .is_error(d)
                 .message(if d { format!("Error: {m}") } else { m })
                 .build()
             }
@@ -223,6 +224,7 @@ peg::parser! {
 #[cfg(test)]
 mod tests {
     use super::parser;
+    use crate::java::grade::DiagnosticSeverity;
 
     #[test]
     fn mutation_row_parses_with_none() {
@@ -251,5 +253,14 @@ mod tests {
         assert_eq!(v["result"], "KILLED");
         assert_eq!(v["test_file_name"], "MyTest");
         assert_eq!(v["test_method"], "testAdds");
+    }
+
+    #[test]
+    fn javac_diag_captures_severity_and_path() {
+        let line = "./Foo.java:12: error: missing semicolon";
+        let diag = parser::parse_diag(line).expect("should parse diagnostic");
+        assert_eq!(diag.file_name(), "Foo.java");
+        assert_eq!(diag.path().display().to_string(), "./Foo.java");
+        assert_eq!(diag.severity(), DiagnosticSeverity::Error);
     }
 }

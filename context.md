@@ -249,7 +249,7 @@
 - [x] `src/util.rs` — Path utilities (`classpath` / `sourcepath`) migrated to accept `&ProjectPaths`.
 - [x] `src/java/paths.rs` — Instance-scoped path model adopted across the project.
 - [x] `src/java/parser.rs` — Tree-sitter wrapper now surfaces errors via `anyhow`, caches capture indices, and exposes a fallible `set_code`.
-- [ ] `src/java/grade/diagnostics.rs` — Diagnostic structs still reflect Rhai-era shapes.
+- [x] `src/java/grade/diagnostics.rs` — Diagnostic structs now capture severity/result enums and expose typed helpers.
 - [ ] `src/parsers.rs` — PEG parsers require alignment with the new diagnostics model.
 - [ ] `src/java/file.rs` — Compile/run/test/doc-check flow still carries legacy ergonomics.
 - [ ] `src/java/project.rs` — Project orchestration to be simplified now that JAR downloads are gone.

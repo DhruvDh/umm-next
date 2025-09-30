@@ -21,7 +21,9 @@ pub mod results;
 pub mod tests;
 
 pub use context::{build_active_retrieval_context, build_heuristic_context, get_source_context};
-pub use diagnostics::{JavacDiagnostic, MutationDiagnostic};
+pub use diagnostics::{
+    DiagnosticSeverity, JavacDiagnostic, MutationDiagnostic, MutationTestResult,
+};
 pub use diff::DiffGrader;
 pub use docs::DocsGrader;
 pub use feedback::{PromptRow, generate_feedback};
