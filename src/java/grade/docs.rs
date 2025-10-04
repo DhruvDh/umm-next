@@ -166,15 +166,11 @@ impl DocsGrader {
             };
             outputs.push(output.clone());
             for line in output.lines() {
-                let result = parser::parse_diag(line);
-                match result {
-                    Ok(res) => {
-                        if file.file_name() == res.file_name() {
-                            diags.push(res.clone());
-                        }
-                        all_diags.push(res);
+                if let Ok(res) = parser::parse_diag(line) {
+                    if file.file_name() == res.file_name() {
+                        diags.push(res.clone());
                     }
-                    Err(_) => continue,
+                    all_diags.push(res);
                 }
             }
         }

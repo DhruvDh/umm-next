@@ -93,12 +93,15 @@ peg::parser! {
             = p:path() l:line_number() d:diag_type() m:diagnostic()
             {
                 let p = std::path::PathBuf::from(p);
-            let name = p.file_name().expect("Could not parse path to file in javac error/warning");
+            let name = p
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.display().to_string());
             let display_path = format!(".{}", p.display());
 
             JavacDiagnostic::builder()
                 .path(display_path)
-                .file_name(name.to_string_lossy().to_string())
+                .file_name(name)
                 .severity(d)
                 .line_number(l)
                 .message(if d { format!("Error: {m}") } else { m })
@@ -227,40 +230,67 @@ mod tests {
     use crate::java::grade::DiagnosticSeverity;
 
     #[test]
-    fn mutation_row_parses_with_none() {
-        // Minimal row with 'none' in test column should not panic and should parse.
-        let line = "Foo,Bar,org.pitest.mutationtest.engine.gregor.mutators.MathMutator,method,42,\
-                    SURVIVED,none";
-        let diag = parser::mutation_report_row(line).expect("should parse mutation row with none");
+    fn mutation_row_parses_none_marker() {
+        let csv = "Foo,Bar,org.pitest.mutationtest.engine.gregor.mutators.MathMutator,method,42,\
+                   SURVIVED,none";
+        let diag = parser::mutation_report_row(csv).expect("parse mutation row without test info");
         let lr: crate::java::grade::LineRef = diag.clone().into();
         assert_eq!(lr.line_number, 42);
         assert_eq!(lr.file_name(), "Bar");
-        let v = serde_json::to_value(&diag).unwrap();
-        assert_eq!(v["result"], "SURVIVED");
+        assert_eq!(diag.result(), "SURVIVED");
+        let snapshot = serde_json::to_value(&diag).unwrap();
+        assert_eq!(snapshot["test_file_name"], "NA");
+        assert_eq!(snapshot["test_method"], "None");
     }
 
     #[test]
-    fn mutation_row_parses_with_class_and_method() {
-        // Typical PIT style last column with class and method hints.
-        let line = "Foo,Source,org.pitest.mutationtest.engine.gregor.mutators.\
-                    ConditionalsBoundaryMutator,method,7,KILLED,a/[class:MyTest]/[method:\
-                    testAdds()]";
-        let diag =
-            parser::mutation_report_row(line).expect("should parse mutation row with class/method");
-        let lr: crate::java::grade::LineRef = diag.clone().into();
-        assert_eq!(lr.line_number, 7);
-        let v = serde_json::to_value(&diag).unwrap();
-        assert_eq!(v["result"], "KILLED");
-        assert_eq!(v["test_file_name"], "MyTest");
-        assert_eq!(v["test_method"], "testAdds");
+    fn mutation_row_parses_class_and_method_hints() {
+        let csv = "Foo,Source,org.pitest.mutationtest.engine.gregor.mutators.\
+                   ConditionalsBoundaryMutator,method,7,KILLED,a/[class:MyTest]/[method:\
+                   testAdds()]";
+        let diag = parser::mutation_report_row(csv).expect("parse mutation row with hints");
+        assert_eq!(diag.result(), "KILLED");
+        let snapshot = serde_json::to_value(&diag).unwrap();
+        assert_eq!(snapshot["test_file_name"], "MyTest");
+        assert_eq!(snapshot["test_method"], "testAdds");
     }
 
     #[test]
-    fn javac_diag_captures_severity_and_path() {
-        let line = "./Foo.java:12: error: missing semicolon";
-        let diag = parser::parse_diag(line).expect("should parse diagnostic");
-        assert_eq!(diag.file_name(), "Foo.java");
-        assert_eq!(diag.path().display().to_string(), "./Foo.java");
-        assert_eq!(diag.severity(), DiagnosticSeverity::Error);
+    fn mutation_row_preserves_other_status() {
+        let csv = "Foo,Source,org.pitest.mutationtest.engine.gregor.mutators.\
+                   RemoveConditionalMutator,method,3,TIMED_OUT,none";
+        let diag = parser::mutation_report_row(csv).expect("parse mutation row with other status");
+        assert_eq!(diag.result(), "TIMED_OUT");
+    }
+
+    #[test]
+    fn mutation_row_rejects_malformed_csv() {
+        assert!(parser::mutation_report_row("too,few,columns").is_err());
+    }
+
+    #[test]
+    fn javac_diag_parses_error_and_warning() {
+        let error_line = "./Foo.java:12: error: missing semicolon";
+        let warning_line = "./Foo.java:15: warning: unchecked call";
+
+        let error_diag = parser::parse_diag(error_line).expect("parse javac error");
+        assert_eq!(error_diag.file_name(), "Foo.java");
+        assert_eq!(error_diag.path().display().to_string(), "./Foo.java");
+        assert!(error_diag.severity().is_error());
+
+        let warning_diag = parser::parse_diag(warning_line).expect("parse javac warning");
+        assert_eq!(warning_diag.severity(), DiagnosticSeverity::Warning);
+        let snapshot = serde_json::to_value(&warning_diag).unwrap();
+        assert!(
+            snapshot["message"]
+                .as_str()
+                .unwrap()
+                .contains("unchecked call")
+        );
+    }
+
+    #[test]
+    fn javac_diag_rejects_invalid_line() {
+        assert!(parser::parse_diag("not a diagnostic line").is_err());
     }
 }

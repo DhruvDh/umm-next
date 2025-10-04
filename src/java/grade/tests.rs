@@ -514,18 +514,11 @@ impl UnitTestGrader {
             for line in reader.lines() {
                 let line = line?;
                 let parse_result = parser::mutation_report_row(&line)
-                    .context("While parsing test_reports/mutations.csv");
+                    .context("While parsing test_reports/mutations.csv")?;
 
-                match parse_result {
-                    Ok(r) => {
-                        if r.result() == "SURVIVED" {
-                            diags.push(r);
-                        }
-                    }
-                    Err(e) => {
-                        anyhow::bail!(e);
-                    }
-                };
+                if parse_result.result() == "SURVIVED" {
+                    diags.push(parse_result);
+                }
             }
             let penalty = diags.len() as u32 * 4;
             eprintln!("Ran mutation tests for {} -", target_test.join(", "));
