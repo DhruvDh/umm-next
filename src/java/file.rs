@@ -561,7 +561,13 @@ impl File {
     }
 
     /// Returns the inner run of this [`File`].
-    fn inner_run(&self, input: Option<String>, err: Stdio, out: Stdio) -> Result<Output> {
+    fn inner_run(
+        &self,
+        input: Option<String>,
+        err: Stdio,
+        out: Stdio,
+        inherit_if_none: bool,
+    ) -> Result<Output> {
         if self.kind != FileType::ClassWithMain {
             Err(JavaFileError::DuringCompilation {
                 stacktrace: "The file you wish to run does not have a main method.".into(),
@@ -571,7 +577,7 @@ impl File {
 
         let class_path = classpath(&self.paths)?;
 
-        if let Some(input_str) = input {
+        if let Some(ref input_str) = input {
             let mut child = Command::new(java_path()?)
                 .arg("--class-path")
                 .arg(class_path.as_str())
@@ -582,19 +588,23 @@ impl File {
                 .spawn()
                 .context("Failed to spawn javac process.")?;
 
-            let input = format!("{}\r\n", input_str);
+            if let Some(mut stdin) = child.stdin.take() {
+                if !input_str.is_empty() {
+                    stdin
+                        .write_all(input_str.as_bytes())
+                        .context("Error when trying to write input to stdin")?;
+                }
 
-            let mut stdin = child.stdin.take().unwrap();
-
-            stdin
-                .write_all(input.as_bytes())
-                .context("Error when trying to write input to stdin")?;
-            stdin.flush().context("Error when trying to flush stdin")?;
+                stdin
+                    .write_all(b"\r\n")
+                    .context("Error when trying to write newline to stdin")?;
+                stdin.flush().context("Error when trying to flush stdin")?;
+            }
 
             child
                 .wait_with_output()
                 .context("Error when waiting for child process to finish")
-        } else {
+        } else if inherit_if_none {
             Command::new(java_path()?)
                 .arg("--class-path")
                 .arg(class_path.as_str())
@@ -605,6 +615,18 @@ impl File {
                 .spawn()?
                 .wait_with_output()
                 .context("Failed to spawn javac process.")
+        } else {
+            Command::new(java_path()?)
+                .arg("--class-path")
+                .arg(class_path.as_str())
+                .arg(self.proper_name.clone())
+                .stdin(Stdio::piped())
+                .stdout(out)
+                .stderr(err)
+                .spawn()
+                .context("Failed to spawn javac process.")?
+                .wait_with_output()
+                .context("Error when waiting for child process to finish")
         }
     }
 
@@ -612,7 +634,7 @@ impl File {
     pub fn run(&self, input: Option<String>) -> Result<String, JavaFileError> {
         self.check()?;
 
-        match self.inner_run(input, Stdio::piped(), Stdio::piped()) {
+        match self.inner_run(input, Stdio::piped(), Stdio::piped(), true) {
             Ok(out) => {
                 let output = unescape(
                     &[
@@ -640,6 +662,45 @@ impl File {
                 }
             }
             Err(e) => Err(anyhow!(e).into()),
+        }
+    }
+
+    /// Runs the java file while piping stdin even when no explicit input is
+    /// supplied.
+    pub fn run_with_input(&self, input: Option<String>) -> Result<String, JavaFileError> {
+        self.check()?;
+
+        match self.inner_run(input, Stdio::piped(), Stdio::piped(), false) {
+            Ok(out) => {
+                let output = unescape(
+                    &[
+                        String::from_utf8(out.stderr)
+                            .context("Error when parsing stderr as utf8")?,
+                        String::from_utf8(out.stdout)
+                            .context("Error when parsing stdout as utf8")?,
+                    ]
+                    .concat(),
+                )
+                .context("Error when un-escaping javac output.")?;
+
+                if out.status.success() {
+                    Ok(output)
+                } else {
+                    let mut diags = Vec::new();
+
+                    for line in output.lines() {
+                        if let Ok(diag) = parser::parse_diag(line) {
+                            diags.push(diag);
+                        }
+                    }
+
+                    Err(JavaFileError::DuringCompilation {
+                        stacktrace: output,
+                        diags,
+                    })
+                }
+            }
+            Err(e) => Err(JavaFileError::Unknown(e)),
         }
     }
 

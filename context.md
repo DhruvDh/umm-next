@@ -293,6 +293,22 @@
 - Determine packaging strategy for any embedded runtime (CI, distribution, cross-platform story).
 - Expand retrieval configuration exposure (builder-style overrides for heuristics and endpoints).
 - Track outstanding PEG/parser refactors needed before Rune work resumes.
+- Diff Grader Modernization — Detailed Notes
+  - Status: initial clean-up applied — guards use logical `&&`, prompts route through `build_context_message` with user/system roles fixed, plain-text prompt bodies append the offending file’s source, diff failures surface an actionable reason, and stdin is always piped to avoid blocking.
+  - Rationale: `src/java/grade/diff.rs` predates the new retrieval/context APIs and still couples UI concerns (ANSI colors) to prompts while depending on Rhai containers. Modernizing it improves correctness, consistency across graders, and unblocks the Rhai removal.
+  - Remaining follow-ups:
+    - Provide compatibility shims if external scripts still rely on the old `set_expected` / `set_input` Rhai setters.
+    - Replace the `colored` crate usage with `owo-colors` (or similar) so terminal colour support is auto-detected without manual env toggles; ensure prompts remain colour-free regardless of the library.
+    - Add regression coverage (unit/integration) for the diff grader, especially zero-input cases to catch stdin regressions.
+    - Investigate migrating other graders (`tests.rs`, `docs.rs`, etc.) off `rhai::Array`/`FnPtr` once the compatibility layer is settled.
+  - Non-goals:
+    - Changing diff algorithm/semantics (still Patience + unicode word granularity).
+    - Re-enabling the top-level `grade` command or altering CLI surfaces.
+   - Acceptance criteria:
+     - `cargo check`, `cargo fmt`, and `cargo clippy --all-targets` pass.
+     - On mismatches, stderr shows a colorized local diff; the stored prompt contains no ANSI codes and uses correct message roles.
+     - On success, returns a full‑credit `GradeResult` with a clear “Got expected output” reason.
+     - No change in diff semantics or grading thresholds.
 
 ## How To Continue (Concrete Next Steps)
 
