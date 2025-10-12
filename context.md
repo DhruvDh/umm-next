@@ -244,27 +244,48 @@
 
 ## Cleanup Checklist
 
+> Work Mode: We are operating in a file-by-file cleanup cadence; cross-file work found during passes is captured as backlog and prioritized separately.
+
 - [x] `src/constants.rs` — Shared tree-sitter queries and retrieval toggles pulled into module scope; file now intentionally empty.
 - [x] `src/config.rs` — Runtime/env bootstrap with cached PostgREST handle (`state::InitCell<Postgrest>`), shared HTTP client, and `AtomicBool` toggle for active retrieval.
 - [x] `src/util.rs` — Path utilities (`classpath` / `sourcepath`) migrated to accept `&ProjectPaths`.
 - [x] `src/java/paths.rs` — Instance-scoped path model adopted across the project.
 - [x] `src/java/parser.rs` — Tree-sitter wrapper now surfaces errors via `anyhow`, caches capture indices, and exposes a fallible `set_code`.
 - [x] `src/java/grade/diagnostics.rs` — Diagnostic structs now capture severity/result enums and expose typed helpers.
-- [ ] `src/parsers.rs` — PEG parsers require alignment with the new diagnostics model.
-- [ ] `src/java/file.rs` — Compile/run/test/doc-check flow still carries legacy ergonomics.
-- [ ] `src/java/project.rs` — Project orchestration to be simplified now that JAR downloads are gone.
 - [x] `src/java/grade/results.rs` — Base grading types updated; Rhai-era borrowing removed.
 - [x] `src/java/grade/context.rs` — Retrieval/context builder refactored and tested.
-- [ ] `src/java/grade/query.rs` — Still coupled to `FnPtr`/Rhai filters; needs redesign.
-- [ ] `src/java/grade/tests.rs` — Unit/hidden test graders pending cleanup after context changes.
-- [ ] `src/java/grade/diff.rs` — Diff grader needs modernization to match new context APIs.
-- [ ] `src/java/grade/docs.rs` — Documentation grader awaiting parser/context follow-up.
-- [ ] `src/java/grade/feedback.rs` — Feedback persistence layer still reflects Supabase-first flows.
-- [ ] `src/java/grade/gradescope.rs` — Gradescope orchestration requires cleanup after feedback changes.
-- [ ] `src/java/grade/mod.rs` — Exports to be revisited once grader internals settle.
-- [ ] `src/java/mod.rs` — Module wiring needs a post-split audit for visibility and exports.
-- [ ] `src/lib.rs` — Library surface still hosts temporary guards around disabled `grade`.
-- [ ] `src/main.rs` — CLI entry to be revisited once scripting path lands.
+
+Queue — Next File Passes (rolling 3–5)
+- [ ] `src/java/grade/query.rs`
+  - Goal: remove Rhai types (`AST`, `Array`, `FnPtr`, `SCRIPT_AST`) and model filters as typed predicates/closures; keep public behavior and error messages stable.
+  - Non-goals: change query semantics or SCM captures.
+  - Acceptance: compiles; `cargo clippy --all-targets` clean; existing query graders behave unchanged on fixtures; no Rhai types in public API.
+- [ ] `src/java/grade/tests.rs`
+  - Goal: replace `rhai::Array` with `Vec<String>` for `test_files`/`expected_tests` and tighten mismatch reporting; keep retrieval prompts identical.
+  - Acceptance: identical outputs on fixtures; clearer missing/unexpected test messages; clippy clean.
+- [ ] `src/java/grade/gradescope.rs`
+  - Goal: remove `rhai::{Array, Map}`; use typed structs end-to-end; ensure emitted JSON stays identical.
+  - Acceptance: JSON shape/values stable on sample results; add minimal doc comments to public structs.
+- [ ] `src/java/grade/feedback.rs`
+  - Goal: drop `rhai::Array` in `generate_feedback`; operate on typed `Vec<GradeResult>`; keep Supabase flow as-is.
+  - Acceptance: FEEDBACK file content unchanged for penalties; clippy clean.
+- [ ] `src/parsers.rs`
+  - Goal: align PEG grammars with typed severities/results; improve Windows path note; add small tests for edge paths.
+  - Acceptance: tests cover missing filename cases and PIT CSV variances.
+
+Follow‑Ups (per-pass discoveries)
+- [ ] `src/java/file.rs` — minor ergonomics: clarify `name` vs `file_name` doc; consider small helpers for fence-building; avoid allocating when entries are empty.
+- [ ] `src/java/project.rs` — add CLI/env overrides for `ProjectPaths`; document runtime usage and spawn boundaries.
+- [x] `src/java/grade/diff.rs` — Console diffs now use `owo-colors` while prompts stay ANSI-free; further regression coverage deferred.
+- [ ] `src/java/grade/docs.rs` — finish guard rails for missing filenames in javac output; ensure prompt truncation/tables remain consistent.
+- [ ] `src/java/grade/mod.rs`, `src/java/mod.rs` — audit exports/visibility after grader refactors.
+- [ ] `src/lib.rs`, `src/main.rs` — revisit once scripting path lands; re-enable `grade` behind a feature gate.
+
+Recent Cleanups (reference)
+- 2025-10-09 — diff grader prompts/typed cases modernized.
+- 2025-10-04 — javac diagnostics guarded against missing filenames.
+- 2025-09-30 — diagnostic severities and PIT results typed.
+- 2025-09-28 — parser error handling tightened; `context.md` status/plan refreshed; `.gitignore` updated to keep `context.md` untracked.
 
 ## Plan (Keep Updated)
 

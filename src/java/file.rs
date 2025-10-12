@@ -689,15 +689,12 @@ impl File {
                     let mut diags = Vec::new();
 
                     for line in output.lines() {
-                        if let Ok(diag) = parser::parse_diag(line) {
+                        if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
                             diags.push(diag);
                         }
                     }
 
-                    Err(JavaFileError::DuringCompilation {
-                        stacktrace: output,
-                        diags,
-                    })
+                    Err(JavaFileError::AtRuntime { output, diags })
                 }
             }
             Err(e) => Err(JavaFileError::Unknown(e)),

@@ -43,7 +43,7 @@ similar = { version = "2.4.0", features = [
   "unicode",
   "unicode-segmentation",
 ] }
-colored = "3.0.0"
+owo-colors = "4.0.0"
 itertools = "0.14.0"
 thiserror = "2.0.16"
 # comrak = { version = "0.21.0", features = [

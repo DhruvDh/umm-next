@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use async_openai::types::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
-use colored::Colorize;
+use owo_colors::OwoColorize;
 use similar::{Algorithm, ChangeTag, utils::diff_unicode_words};
 
 use super::results::{Grade, GradeResult};
@@ -11,6 +11,17 @@ use crate::{
     java::{JavaFileError, Project, grade::LineRef},
     retrieval::build_context_message,
 };
+
+/// Filters line references down to files that exist in the discovered project.
+fn filter_known_refs<T>(project: &Project, refs: Vec<T>) -> Vec<LineRef>
+where
+    T: Into<LineRef>,
+{
+    refs.into_iter()
+        .map(Into::into)
+        .filter(|line_ref| project.contains(line_ref.file_name()))
+        .collect()
+}
 
 #[derive(Debug, Clone)]
 /// Represents a single diff test case pairing optional stdin with an expected
@@ -174,6 +185,7 @@ impl DiffGrader {
                 let out = match file.run_with_input(input.clone()) {
                     Ok(out) => out,
                     Err(JavaFileError::AtRuntime { output, diags }) => {
+                        let resolved_diags = filter_known_refs(&self.project, diags);
                         let messages = vec![
                             ChatCompletionRequestSystemMessageArgs::default()
                                 .content(prompt_set.system_message().to_string())
@@ -187,7 +199,7 @@ impl DiffGrader {
                                 .build()
                                 .context("Failed to build user message")?
                                 .into(),
-                            build_context_message(&self.project, None, diags)?,
+                            build_context_message(&self.project, None, resolved_diags)?,
                         ];
                         return Ok(GradeResult {
                             requirement: self.req_name.clone(),
@@ -197,6 +209,7 @@ impl DiffGrader {
                         });
                     }
                     Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
+                        let resolved_diags = filter_known_refs(&self.project, diags);
                         let messages = vec![
                             ChatCompletionRequestSystemMessageArgs::default()
                                 .content(prompt_set.system_message().to_string())
@@ -213,7 +226,7 @@ impl DiffGrader {
                                 .build()
                                 .context("Failed to build user message")?
                                 .into(),
-                            build_context_message(&self.project, None, diags)?,
+                            build_context_message(&self.project, None, resolved_diags)?,
                         ];
                         return Ok(GradeResult {
                             requirement: self.req_name.clone(),

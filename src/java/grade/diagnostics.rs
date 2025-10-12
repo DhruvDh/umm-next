@@ -113,6 +113,7 @@ pub enum DiagnosticSeverity {
 }
 
 impl DiagnosticSeverity {
+    /// Returns the uppercase label used when rendering diagnostics.
     fn as_str(self) -> &'static str {
         match self {
             DiagnosticSeverity::Error => "ERROR",
