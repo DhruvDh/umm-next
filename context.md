@@ -256,6 +256,7 @@
 - [x] `src/java/grade/context.rs` — Retrieval/context builder refactored and tested.
 
 Queue — Next File Passes (rolling 3–5)
+
 - [ ] `src/java/grade/query.rs`
   - Goal: remove Rhai types (`AST`, `Array`, `FnPtr`, `SCRIPT_AST`) and model filters as typed predicates/closures; keep public behavior and error messages stable.
   - Non-goals: change query semantics or SCM captures.
@@ -274,14 +275,16 @@ Queue — Next File Passes (rolling 3–5)
   - Acceptance: tests cover missing filename cases and PIT CSV variances.
 
 Follow‑Ups (per-pass discoveries)
+
 - [ ] `src/java/file.rs` — minor ergonomics: clarify `name` vs `file_name` doc; consider small helpers for fence-building; avoid allocating when entries are empty.
-- [ ] `src/java/project.rs` — add CLI/env overrides for `ProjectPaths`; document runtime usage and spawn boundaries.
+- [ ] `src/java/project.rs` — honor path overrides (CLI/env), remove discovery panics, tighten runtime spawning/cache logic.
 - [x] `src/java/grade/diff.rs` — Console diffs now use `owo-colors` while prompts stay ANSI-free; further regression coverage deferred.
 - [ ] `src/java/grade/docs.rs` — finish guard rails for missing filenames in javac output; ensure prompt truncation/tables remain consistent.
 - [ ] `src/java/grade/mod.rs`, `src/java/mod.rs` — audit exports/visibility after grader refactors.
 - [ ] `src/lib.rs`, `src/main.rs` — revisit once scripting path lands; re-enable `grade` behind a feature gate.
 
 Recent Cleanups (reference)
+
 - 2025-10-09 — diff grader prompts/typed cases modernized.
 - 2025-10-04 — javac diagnostics guarded against missing filenames.
 - 2025-09-30 — diagnostic severities and PIT results typed.
@@ -325,11 +328,11 @@ Recent Cleanups (reference)
   - Non-goals:
     - Changing diff algorithm/semantics (still Patience + unicode word granularity).
     - Re-enabling the top-level `grade` command or altering CLI surfaces.
-   - Acceptance criteria:
-     - `cargo check`, `cargo fmt`, and `cargo clippy --all-targets` pass.
-     - On mismatches, stderr shows a colorized local diff; the stored prompt contains no ANSI codes and uses correct message roles.
-     - On success, returns a full‑credit `GradeResult` with a clear “Got expected output” reason.
-     - No change in diff semantics or grading thresholds.
+  - Acceptance criteria:
+    - `cargo check`, `cargo fmt`, and `cargo clippy --all-targets` pass.
+    - On mismatches, stderr shows a colorized local diff; the stored prompt contains no ANSI codes and uses correct message roles.
+    - On success, returns a full‑credit `GradeResult` with a clear “Got expected output” reason.
+    - No change in diff semantics or grading thresholds.
 
 ## How To Continue (Concrete Next Steps)
 

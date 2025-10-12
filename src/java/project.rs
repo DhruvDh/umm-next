@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs};
-use futures::{future::join_all, stream::FuturesUnordered};
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::{file::File, paths::ProjectPaths};
@@ -20,15 +20,18 @@ use crate::{
 pub struct Project {
     /// Collection of java files in this project
     files: Vec<File>,
-    /// Names of java files in this project.
+    /// Cached list of proper names kept in lockstep with `files` so we can
+    /// satisfy direct name lookups quickly. If we ever mutate the project
+    /// contents after construction, prefer tightening this to an index map
+    /// instead of maintaining parallel vectors.
     names: Vec<String>,
     /// Workspace paths associated with this project
     paths: ProjectPaths,
 }
 
 impl Project {
-    /// Initializes a Project by discovering Java files in the
-    /// [struct@UMM_DIR] directory and preparing metadata for later operations.
+    /// Initializes a Project by discovering Java files in the workspace root
+    /// and preparing metadata for later operations.
     pub fn new() -> Result<Self> {
         Self::from_paths(ProjectPaths::default())
     }
@@ -39,29 +42,34 @@ impl Project {
         let mut names = vec![];
 
         let runtime = config::runtime();
-        let rt = runtime.handle().clone();
+        let handle = runtime.handle().clone();
         let paths_for_search = paths.clone();
-        let rt_for_spawn = rt.clone();
 
-        let results = rt.block_on(async move {
-            let found_files = match find_files("java", 15, paths_for_search.root_dir()) {
-                Ok(f) => f,
-                Err(e) => panic!("Could not find java files: {e}"),
-            };
+        let discovered_files = handle.block_on(async move {
+            let found_files =
+                find_files("java", 15, paths_for_search.root_dir()).with_context(|| {
+                    format!(
+                        "Could not discover Java files under {}",
+                        paths_for_search.root_dir().display()
+                    )
+                })?;
 
-            let handles = FuturesUnordered::new();
-
+            let mut handles = FuturesUnordered::new();
             for path in found_files {
                 let file_paths = paths_for_search.clone();
-                let handle_clone = rt_for_spawn.clone();
-                handles.push(handle_clone.spawn_blocking(move || File::new(path, file_paths)));
+                handles.push(tokio::task::spawn_blocking(move || File::new(path, file_paths)));
             }
 
-            join_all(handles).await
-        });
+            let mut collected = Vec::new();
+            while let Some(result) = handles.next().await {
+                let file = result.context("A file discovery task panicked or was cancelled")??;
+                collected.push(file);
+            }
 
-        for result in results {
-            let file = result??;
+            Ok::<_, anyhow::Error>(collected)
+        })?;
+
+        for file in discovered_files {
             names.push(file.proper_name());
             files.push(file);
         }
@@ -85,26 +93,8 @@ impl Project {
     ///
     /// * `name`: partial/fully formed name of the Java file to look for.
     pub fn identify(&self, name: &str) -> Result<File> {
-        if let Some(i) = self.names.iter().position(|n| n == name) {
-            Ok(self.files[i].clone())
-        } else if let Some(i) = self.files.iter().position(|n| n.file_name() == name) {
-            Ok(self.files[i].clone())
-        } else if let Some(i) = self
-            .files
-            .iter()
-            .position(|n| n.file_name().trim_end_matches(".java") == name)
-        {
-            Ok(self.files[i].clone())
-        } else if let Some(i) = self.files.iter().position(|n| n.simple_name() == name) {
-            Ok(self.files[i].clone())
-        } else if let Some(i) = self
-            .files
-            .iter()
-            .position(|n| n.path().display().to_string() == name)
-        {
-            Ok(self.files[i].clone())
-        } else if let Some(i) = self.files.iter().position(|n| n.proper_name() == name) {
-            Ok(self.files[i].clone())
+        if let Some(index) = self.locate_index(name) {
+            Ok(self.files[index].clone())
         } else {
             bail!("Could not find {} in the project", name)
         }
@@ -112,7 +102,7 @@ impl Project {
 
     /// Returns true if project contains a file with the given name.
     pub fn contains(&self, name: &str) -> bool {
-        self.identify(name).is_ok()
+        self.locate_index(name).is_some()
     }
 
     /// Returns the workspace paths associated with this project.
@@ -137,6 +127,9 @@ impl Project {
         let mut lines = vec!["<project>".to_string()];
 
         for file in self.files.iter() {
+            // Hidden-test fixtures generated by ByHiddenTestGrader carry
+            // "Hidden" in their proper name. Skip them so we don't include
+            // instructor-only assets in the synthesized outline.
             if file.proper_name().contains("Hidden") {
                 continue;
             }
@@ -145,6 +138,36 @@ impl Project {
 
         lines.push("</project>".to_string());
         lines.join("\n")
+    }
+}
+
+impl Project {
+    /// Attempts to locate the index of a file that matches the provided name.
+    fn locate_index(&self, name: &str) -> Option<usize> {
+        self.names
+            .iter()
+            .position(|n| n == name)
+            .or_else(|| self.files.iter().position(|file| file.file_name() == name))
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .position(|file| file.file_name().trim_end_matches(".java") == name)
+            })
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .position(|file| file.simple_name() == name)
+            })
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .position(|file| file.path().display().to_string() == name)
+            })
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .position(|file| file.proper_name() == name)
+            })
     }
 }
 
