@@ -102,7 +102,7 @@ impl DocsGrader {
 
     /// Grades documentation by using the -Xdoclint javac flag.
     /// Scans javac output for generated warnings and grades accordingly.
-    pub fn grade_docs(self) -> Result<GradeResult> {
+    pub async fn grade_docs(self) -> Result<GradeResult> {
         let mut diags = vec![];
         let mut all_diags = vec![];
         let prompts = config::prompts();
@@ -118,7 +118,7 @@ impl DocsGrader {
         let mut outputs = vec![];
         for name in &files {
             let file = self.project.identify(name)?;
-            let output = match file.doc_check() {
+            let output = match file.doc_check().await {
                 Ok(o) => o,
                 Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
                     let messages = vec![

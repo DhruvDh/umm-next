@@ -135,7 +135,8 @@ fn options() -> Cmd {
     cmd.to_options().descr("Build tool for novices").run()
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     dotenv().ok();
 
     let fmt = fmt::layer()
@@ -154,14 +155,14 @@ fn main() -> Result<()> {
     match cmd {
         Cmd::Run(f) => {
             let file = Project::new()?.identify(f.as_str())?;
-            match file.run(None) {
+            match file.run(None).await {
                 Ok(out) => println!("{out}"),
                 Err(e) => eprintln!("{:#?}", e),
             }
         }
         Cmd::Check(f) => {
             let file = Project::new()?.identify(f.as_str())?;
-            match file.check() {
+            match file.check().await {
                 Ok(out) => println!("{out}"),
                 Err(e) => eprintln!("{:#?}", e),
             }
@@ -170,17 +171,17 @@ fn main() -> Result<()> {
             let project = Project::new()?;
             let file = project.identify(f.as_str())?;
             let out = if t.is_empty() {
-                file.test(Vec::<&str>::new(), Some(&project))?
+                file.test(Vec::<&str>::new(), Some(&project)).await?
             } else {
                 let test_refs: Vec<&str> = t.iter().map(String::as_str).collect();
-                file.test(test_refs, Some(&project))?
+                file.test(test_refs, Some(&project)).await?
             };
 
             println!("{out}");
         }
         Cmd::DocCheck(f) => {
             let file = Project::new()?.identify(f.as_str())?;
-            let out = file.doc_check()?;
+            let out = file.doc_check().await?;
             println!("{out}");
         }
         Cmd::Grade(g) => grade(&g)?,

@@ -1,11 +1,9 @@
 use anyhow::{Context, Result, bail};
 use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs};
-use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::{file::File, paths::ProjectPaths};
 use crate::{
-    config,
     java::grade::{
         LineRef,
         context::{build_active_retrieval_context, build_heuristic_context},
@@ -41,35 +39,14 @@ impl Project {
         let mut files = vec![];
         let mut names = vec![];
 
-        let runtime = config::runtime();
-        let handle = runtime.handle().clone();
-        let paths_for_search = paths.clone();
-
-        let discovered_files = handle.block_on(async move {
-            let found_files =
-                find_files("java", 15, paths_for_search.root_dir()).with_context(|| {
-                    format!(
-                        "Could not discover Java files under {}",
-                        paths_for_search.root_dir().display()
-                    )
-                })?;
-
-            let mut handles = FuturesUnordered::new();
-            for path in found_files {
-                let file_paths = paths_for_search.clone();
-                handles.push(tokio::task::spawn_blocking(move || File::new(path, file_paths)));
-            }
-
-            let mut collected = Vec::new();
-            while let Some(result) = handles.next().await {
-                let file = result.context("A file discovery task panicked or was cancelled")??;
-                collected.push(file);
-            }
-
-            Ok::<_, anyhow::Error>(collected)
+        let found_files = find_files("java", 15, paths.root_dir()).with_context(|| {
+            format!("Could not discover Java files under {}", paths.root_dir().display())
         })?;
 
-        for file in discovered_files {
+        for path in found_files {
+            let display_path = path.display().to_string();
+            let file = File::new(path, paths.clone())
+                .with_context(|| format!("Failed to load {}", display_path))?;
             names.push(file.proper_name());
             files.push(file);
         }

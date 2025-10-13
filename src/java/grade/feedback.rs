@@ -5,6 +5,7 @@ use async_openai::types::ChatCompletionRequestMessage;
 use rhai::Array;
 use serde::Serialize;
 use serde_json;
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use super::results::GradeResult;
@@ -35,7 +36,6 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
                  feedback."
             )
         })?;
-        let runtime = config::runtime();
         let id = Uuid::new_v4().to_string();
         let result = result.clone();
         let body = PromptRow {
@@ -50,7 +50,13 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         let messages = serde_json::to_string(&body)?;
 
         // Post to the database
-        runtime.block_on(async { client.from("prompts").insert(messages).execute().await })?;
+        let submit = insert_prompt_row(client.clone(), messages.clone());
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(submit)?,
+            Err(_) => Runtime::new()
+                .context("Failed to create Tokio runtime for Supabase call")?
+                .block_on(insert_prompt_row(client, messages))?,
+        }
 
         // Return feedback URL
         Ok(format!(
@@ -88,5 +94,16 @@ pub fn generate_feedback(results: Array) -> Result<()> {
         .context("Something went wrong writing FEEDBACK file.")?;
     }
 
+    Ok(())
+}
+
+/// Inserts the serialized prompt row into Supabase.
+async fn insert_prompt_row(client: postgrest::Postgrest, messages: String) -> Result<()> {
+    client
+        .from("prompts")
+        .insert(messages)
+        .execute()
+        .await
+        .context("Failed to write prompt row to Supabase")?;
     Ok(())
 }

@@ -1,8 +1,8 @@
 use std::{
+    ffi::{OsStr, OsString},
     hash::{Hash, Hasher},
-    io::Write,
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -11,7 +11,7 @@ use snailquote::unescape;
 
 use super::{parser::Parser, paths::ProjectPaths, project::Project};
 use crate::{
-    Dict,
+    Dict, config,
     java::{
         grade::{JavacDiagnostic, LineRef},
         queries::{
@@ -22,6 +22,7 @@ use crate::{
         },
     },
     parsers::parser,
+    process::{self, StdinSource},
     util::{classpath, java_path, javac_path, sourcepath},
 };
 
@@ -163,22 +164,27 @@ pub enum FileType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Struct representing a java file
+///
+/// Captures the filesystem name (`file_name`), the simple Java identifier
+/// (`name`), and the package-qualified form (`proper_name`) so callers can
+/// choose whichever is most convenient.
 pub struct File {
     /// path to java file.
     path:         PathBuf,
-    /// name of file.
+    /// Filesystem name (including the `.java` extension).
     file_name:    String,
     /// package the java file belongs to.
     package_name: Option<String>,
     /// imports made by the java file.
     imports:      Option<Vec<Dict>>,
-    /// name of the file TODO: How does this differ from `file_name`?
+    /// Simple, unqualified Java identifier extracted from the declaration.
     name:         String,
-    /// colored terminal string representing java file name.
+    /// Package-qualified Java name (no ANSI colors, just dotted notation).
     proper_name:  String,
-    /// Name of tests methods in this file, as understood by JUnit.
+    /// Fully qualified `Class#method` strings discovered via `@Test`
+    /// annotations.
     test_methods: Vec<String>,
-    /// Name of tests methods in this file, colored using terminal color codes.
+    /// Classification of the Java file (class, interface, test, etc.).
     kind:         FileType,
     #[serde(skip)]
     /// The parser for this file
@@ -243,6 +249,73 @@ pub enum JavaFileError {
 }
 
 impl File {
+    /// Builds the standard set of `javac` arguments for this file.
+    fn javac_args(&self, include_doclint: bool, prefer_source: bool) -> Result<Vec<OsString>> {
+        let mut args = vec![
+            OsString::from("--source-path"),
+            OsString::from(sourcepath(&self.paths)?),
+            OsString::from("-g"),
+            OsString::from("--class-path"),
+            OsString::from(classpath(&self.paths)?),
+            OsString::from("-d"),
+            OsString::from(self.paths.build_dir().to_str().unwrap_or(".").to_string()),
+            self.path.as_os_str().to_os_string(),
+            OsString::from("-Xdiags:verbose"),
+        ];
+        if include_doclint {
+            args.push(OsString::from("-Xdoclint"));
+        }
+        if prefer_source {
+            args.push(OsString::from("-Xprefer:source"));
+        }
+        Ok(args)
+    }
+
+    /// Constructs the `java` invocation for running a main class.
+    fn java_run_args(&self) -> Result<Vec<OsString>> {
+        Ok(vec![
+            OsString::from("--class-path"),
+            OsString::from(classpath(&self.paths)?),
+            OsString::from(self.proper_name.clone()),
+        ])
+    }
+
+    /// Constructs the `java` invocation for the JUnit console launcher.
+    fn junit_args(&self, selectors: &[String]) -> Result<Vec<OsString>> {
+        let mut args = vec![
+            OsString::from("-cp"),
+            OsString::from(classpath(&self.paths)?),
+            OsString::from("org.junit.platform.console.ConsoleLauncher"),
+            OsString::from("--disable-banner"),
+            OsString::from("--disable-ansi-colors"),
+            OsString::from("--details-theme=unicode"),
+            OsString::from("--single-color"),
+        ];
+
+        if selectors.is_empty() {
+            args.push(OsString::from("--scan-class-path"));
+        } else {
+            for selector in selectors {
+                args.push(OsString::from(selector));
+            }
+        }
+
+        Ok(args)
+    }
+
+    /// Spawns the given command, wiring stdin/stdout/stderr, and returns the
+    /// collected output once the process completes.
+    async fn collect_process(
+        program: &OsStr,
+        args: &[OsString],
+        stdin: StdinSource,
+        timeout: Duration,
+    ) -> Result<process::Collected, JavaFileError> {
+        process::run_collect(program, args, stdin, None, &[], Some(timeout))
+            .await
+            .map_err(JavaFileError::Unknown)
+    }
+
     /// Creates a new `File` from `path`
     ///
     /// * `path`: the path to read and try to create a File instance for.
@@ -458,43 +531,27 @@ impl File {
         })
     }
 
-    /// Returns the inner doc check of this [`File`].
-    fn inner_doc_check(&self, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
-        let source_path = sourcepath(&self.paths)?;
-        let class_path = classpath(&self.paths)?;
-        let build_dir = self.paths.build_dir().to_str().unwrap_or(".").to_string();
-
-        Command::new(javac_path()?)
-            .stderr(err)
-            .stdout(out)
-            .stdin(in_)
-            .arg("--source-path")
-            .arg(source_path.as_str())
-            .arg("-g")
-            .arg("--class-path")
-            .arg(class_path.as_str())
-            .arg("-d")
-            .arg(build_dir)
-            .arg(self.path.as_path())
-            .arg("-Xdiags:verbose")
-            .arg("-Xdoclint")
-            .output()
-            .context("Failed to spawn javac process.")
-    }
-
     /// Utility method to ask javac for documentation lints using the -Xdoclint
     /// flag.
-    ///
-    /// The method simply returns the output produced by javac as a String.
-    /// There is a ['parse_diag method'][fn@crate::parsers::parser::parse_diag]
-    /// that can parse these to yield useful information.
-    pub fn doc_check(&self) -> Result<String, JavaFileError> {
-        let child = self.inner_doc_check(Stdio::piped(), Stdio::piped(), Stdio::piped())?;
+    pub async fn doc_check(&self) -> Result<String, JavaFileError> {
+        let javac = javac_path().map_err(JavaFileError::Unknown)?;
+        let args = self
+            .javac_args(true, false)
+            .map_err(JavaFileError::Unknown)?;
 
+        let collected = Self::collect_process(
+            javac.as_os_str(),
+            &args,
+            StdinSource::Null,
+            config::javac_timeout(),
+        )
+        .await?;
+
+        let process::Collected { stdout, stderr, .. } = collected;
         let output = unescape(
             &[
-                String::from_utf8(child.stderr).context("Error when parsing stderr as utf8")?,
-                String::from_utf8(child.stdout).context("Error when parsing stdout as utf8")?,
+                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
+                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
             ]
             .concat(),
         )
@@ -503,248 +560,159 @@ impl File {
         Ok(output)
     }
 
-    /// Returns the inner check of this [`File`].
-    fn inner_check(&self, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
-        let source_path = sourcepath(&self.paths)?;
-        let class_path = classpath(&self.paths)?;
-        let build_dir = self.paths.build_dir().to_str().unwrap_or(".").to_string();
+    /// Utility method to check for syntax errors using javac.
+    pub async fn check(&self) -> Result<String, JavaFileError> {
+        let javac = javac_path().map_err(JavaFileError::Unknown)?;
+        let args = self
+            .javac_args(false, true)
+            .map_err(JavaFileError::Unknown)?;
 
-        Command::new(javac_path()?)
-            .stderr(err)
-            .stdout(out)
-            .stdin(in_)
-            .arg("--source-path")
-            .arg(source_path.as_str())
-            .arg("-g")
-            .arg("--class-path")
-            .arg(class_path.as_str())
-            .arg("-d")
-            .arg(build_dir)
-            .arg(self.path.as_path())
-            .arg("-Xdiags:verbose")
-            .arg("-Xprefer:source")
-            .output()
-            .context("Failed to spawn javac process.")
-    }
+        let collected = Self::collect_process(
+            javac.as_os_str(),
+            &args,
+            StdinSource::Null,
+            config::javac_timeout(),
+        )
+        .await?;
 
-    /// Utility method to check for syntax errors using javac flag.
-    pub fn check(&self) -> Result<String, JavaFileError> {
-        match self.inner_check(Stdio::piped(), Stdio::piped(), Stdio::piped()) {
-            Ok(out) => {
-                let output = unescape(
-                    &[
-                        String::from_utf8(out.stderr).context("Error parsing stderr as utf8")?,
-                        String::from_utf8(out.stdout).context("Error parsing stdout as utf8")?,
-                    ]
-                    .concat(),
-                )
-                .context("Error when un-escaping javac output.")?;
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = collected;
+        let output = unescape(
+            &[
+                String::from_utf8(stderr).context("Error parsing stderr as utf8")?,
+                String::from_utf8(stdout).context("Error parsing stdout as utf8")?,
+            ]
+            .concat(),
+        )
+        .context("Error when un-escaping javac output.")?;
 
-                if out.status.success() {
-                    Ok(output)
-                } else {
-                    let mut diags = Vec::new();
-                    for line in output.lines() {
-                        if let Ok(diag) = parser::parse_diag(line) {
-                            diags.push(diag);
-                        }
-                    }
-
-                    Err(JavaFileError::DuringCompilation {
-                        stacktrace: output,
-                        diags,
-                    })
-                }
-            }
-            Err(e) => Err(JavaFileError::Unknown(e)),
-        }
-    }
-
-    /// Returns the inner run of this [`File`].
-    fn inner_run(
-        &self,
-        input: Option<String>,
-        err: Stdio,
-        out: Stdio,
-        inherit_if_none: bool,
-    ) -> Result<Output> {
-        if self.kind != FileType::ClassWithMain {
-            Err(JavaFileError::DuringCompilation {
-                stacktrace: "The file you wish to run does not have a main method.".into(),
-                diags:      vec![],
-            })?;
-        }
-
-        let class_path = classpath(&self.paths)?;
-
-        if let Some(ref input_str) = input {
-            let mut child = Command::new(java_path()?)
-                .arg("--class-path")
-                .arg(class_path.as_str())
-                .arg(self.proper_name.clone())
-                .stdin(Stdio::piped())
-                .stdout(out)
-                .stderr(err)
-                .spawn()
-                .context("Failed to spawn javac process.")?;
-
-            if let Some(mut stdin) = child.stdin.take() {
-                if !input_str.is_empty() {
-                    stdin
-                        .write_all(input_str.as_bytes())
-                        .context("Error when trying to write input to stdin")?;
-                }
-
-                stdin
-                    .write_all(b"\r\n")
-                    .context("Error when trying to write newline to stdin")?;
-                stdin.flush().context("Error when trying to flush stdin")?;
-            }
-
-            child
-                .wait_with_output()
-                .context("Error when waiting for child process to finish")
-        } else if inherit_if_none {
-            Command::new(java_path()?)
-                .arg("--class-path")
-                .arg(class_path.as_str())
-                .arg(self.proper_name.clone())
-                .stdin(Stdio::inherit())
-                .stdout(out)
-                .stderr(err)
-                .spawn()?
-                .wait_with_output()
-                .context("Failed to spawn javac process.")
+        if status.success() {
+            Ok(output)
         } else {
-            Command::new(java_path()?)
-                .arg("--class-path")
-                .arg(class_path.as_str())
-                .arg(self.proper_name.clone())
-                .stdin(Stdio::piped())
-                .stdout(out)
-                .stderr(err)
-                .spawn()
-                .context("Failed to spawn javac process.")?
-                .wait_with_output()
-                .context("Error when waiting for child process to finish")
+            let mut diags = Vec::new();
+            for line in output.lines() {
+                if let Ok(diag) = parser::parse_diag(line) {
+                    diags.push(diag);
+                }
+            }
+
+            Err(JavaFileError::DuringCompilation {
+                stacktrace: output,
+                diags,
+            })
         }
     }
 
     /// Utility method to run a java file that has a main method.
-    pub fn run(&self, input: Option<String>) -> Result<String, JavaFileError> {
-        self.check()?;
+    pub async fn run(&self, input: Option<String>) -> Result<String, JavaFileError> {
+        if self.kind != FileType::ClassWithMain {
+            return Err(JavaFileError::DuringCompilation {
+                stacktrace: "The file you wish to run does not have a main method.".into(),
+                diags:      vec![],
+            });
+        }
 
-        match self.inner_run(input, Stdio::piped(), Stdio::piped(), true) {
-            Ok(out) => {
-                let output = unescape(
-                    &[
-                        String::from_utf8(out.stderr)
-                            .context("Error when parsing stderr as utf8")?,
-                        String::from_utf8(out.stdout)
-                            .context("Error when parsing stdout as utf8")?,
-                    ]
-                    .concat(),
-                )
-                .context("Error when escaping java output.")?;
+        self.check().await?;
 
-                if out.status.success() {
-                    Ok(output)
-                } else {
-                    let mut diags = Vec::new();
+        let java = java_path().map_err(JavaFileError::Unknown)?;
+        let args = self.java_run_args().map_err(JavaFileError::Unknown)?;
 
-                    for line in output.lines() {
-                        if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                            diags.push(diag);
-                        }
-                    }
+        let stdin_mode = match input {
+            Some(mut value) => {
+                value.push_str("\r\n");
+                StdinSource::Bytes(value.into_bytes())
+            }
+            None => StdinSource::Inherit,
+        };
 
-                    Err(JavaFileError::AtRuntime { output, diags })
+        let collected =
+            Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
+                .await?;
+
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = collected;
+        let output = unescape(
+            &[
+                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
+                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
+            ]
+            .concat(),
+        )
+        .context("Error when escaping java output.")?;
+
+        if status.success() {
+            Ok(output)
+        } else {
+            let mut diags = Vec::new();
+            for line in output.lines() {
+                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
+                    diags.push(diag);
                 }
             }
-            Err(e) => Err(anyhow!(e).into()),
+
+            Err(JavaFileError::AtRuntime { output, diags })
         }
     }
 
     /// Runs the java file while piping stdin even when no explicit input is
     /// supplied.
-    pub fn run_with_input(&self, input: Option<String>) -> Result<String, JavaFileError> {
-        self.check()?;
-
-        match self.inner_run(input, Stdio::piped(), Stdio::piped(), false) {
-            Ok(out) => {
-                let output = unescape(
-                    &[
-                        String::from_utf8(out.stderr)
-                            .context("Error when parsing stderr as utf8")?,
-                        String::from_utf8(out.stdout)
-                            .context("Error when parsing stdout as utf8")?,
-                    ]
-                    .concat(),
-                )
-                .context("Error when un-escaping javac output.")?;
-
-                if out.status.success() {
-                    Ok(output)
-                } else {
-                    let mut diags = Vec::new();
-
-                    for line in output.lines() {
-                        if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                            diags.push(diag);
-                        }
-                    }
-
-                    Err(JavaFileError::AtRuntime { output, diags })
-                }
-            }
-            Err(e) => Err(JavaFileError::Unknown(e)),
+    pub async fn run_with_input(&self, input: Option<String>) -> Result<String, JavaFileError> {
+        if self.kind != FileType::ClassWithMain {
+            return Err(JavaFileError::DuringCompilation {
+                stacktrace: "The file you wish to run does not have a main method.".into(),
+                diags:      vec![],
+            });
         }
-    }
 
-    /// Inner method to run tests.
-    fn inner_test(&self, tests: Vec<&str>, err: Stdio, out: Stdio, in_: Stdio) -> Result<Output> {
-        let tests = {
-            let mut new_tests = Vec::<String>::new();
-            for t in tests {
-                new_tests.push(format!("{}#{}", self.proper_name.clone(), t));
-            }
+        self.check().await?;
 
-            if new_tests.is_empty() {
-                self.test_methods.clone()
-            } else {
-                new_tests
+        let java = java_path().map_err(JavaFileError::Unknown)?;
+        let args = self.java_run_args().map_err(JavaFileError::Unknown)?;
+
+        let stdin_mode = match input {
+            Some(mut value) => {
+                value.push_str("\r\n");
+                StdinSource::Bytes(value.into_bytes())
             }
+            None => StdinSource::Bytes(Vec::new()),
         };
 
-        let method_selectors = tests
-            .iter()
-            .map(|s| format!("--select-method={s}"))
-            .collect::<Vec<String>>();
+        let collected =
+            Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
+                .await?;
 
-        let class_path = classpath(&self.paths)?;
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = collected;
+        let output = unescape(
+            &[
+                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
+                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
+            ]
+            .concat(),
+        )
+        .context("Error when un-escaping javac output.")?;
 
-        let mut command =
-            Command::new(java_path().context("Could not find `java` command on path.")?);
-        command.stderr(err).stdout(out).stdin(in_);
-
-        command
-            .arg("-cp")
-            .arg(class_path.as_str())
-            .arg("org.junit.platform.console.ConsoleLauncher")
-            .arg("--disable-banner")
-            .arg("--disable-ansi-colors")
-            .arg("--details-theme=unicode")
-            .arg("--single-color");
-
-        if method_selectors.is_empty() {
-            command.arg("--scan-class-path");
+        if status.success() {
+            Ok(output)
         } else {
-            for selector in method_selectors {
-                command.arg(selector);
+            let mut diags = Vec::new();
+            for line in output.lines() {
+                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
+                    diags.push(diag);
+                }
             }
-        }
 
-        command.output().context("Failed to spawn javac process.")
+            Err(JavaFileError::AtRuntime { output, diags })
+        }
     }
 
     /// A utility method that takes a list of strings (or types that implement
@@ -756,72 +724,95 @@ impl File {
     ///
     /// * `tests`: list of strings (or types that implement `Into<String>`)
     ///   meant to represent test method names,
-    pub fn test(
+    pub async fn test(
         &self,
         tests: Vec<&str>,
         project: Option<&Project>,
     ) -> Result<String, JavaFileError> {
-        self.check()?;
+        self.check().await?;
 
-        match self.inner_test(tests, Stdio::piped(), Stdio::piped(), Stdio::inherit()) {
-            Ok(out) => {
-                let output = unescape(
-                    &[
-                        String::from_utf8(out.stderr)
-                            .context("Error when parsing stderr as utf8")?,
-                        String::from_utf8(out.stdout)
-                            .context("Error when parsing stdout as utf8")?,
-                    ]
-                    .concat(),
-                )
-                .context("Error when un-escaping JUnit output.")?;
+        let java = java_path().map_err(JavaFileError::Unknown)?;
 
-                if out.status.success() {
-                    Ok(output)
-                } else {
-                    let mut diags = Vec::new();
-                    let mut new_output = Vec::new();
+        let explicit_tests = {
+            let mut mapped = Vec::<String>::new();
+            for t in tests {
+                mapped.push(format!("{}#{}", self.proper_name.clone(), t));
+            }
 
-                    for line in output.lines() {
-                        if line.contains("MethodSource") || line.contains("Native Method") {
-                            continue;
-                        }
+            if mapped.is_empty() {
+                self.test_methods.clone()
+            } else {
+                mapped
+            }
+        };
 
-                        // if line.contains("Test run finished after") {
-                        //     break;
-                        // }
+        let selectors: Vec<String> = explicit_tests
+            .iter()
+            .map(|s| format!("--select-method={s}"))
+            .collect();
 
-                        if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                            if let Some(proj) = project
-                                && proj.identify(diag.file_name()).is_ok()
-                            {
-                                new_output.push(
-                                    line.replace("\\\\", "\\").replace("\\\"", "\"").to_string(),
-                                );
-                            }
-                            diags.push(diag);
-                        } else if let Ok(diag) = parser::parse_diag(line) {
-                            if let Some(proj) = project
-                                && proj.identify(diag.file_name()).is_ok()
-                            {
-                                new_output.push(
-                                    line.replace("\\\\", "\\").replace("\\\"", "\"").to_string(),
-                                );
-                            }
-                            diags.push(diag.into());
-                        } else {
-                            new_output
-                                .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
-                        }
+        let args = self
+            .junit_args(&selectors)
+            .map_err(JavaFileError::Unknown)?;
+
+        let collected = Self::collect_process(
+            java.as_os_str(),
+            &args,
+            StdinSource::Inherit,
+            config::java_timeout(),
+        )
+        .await?;
+
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = collected;
+        let output = unescape(
+            &[
+                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
+                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
+            ]
+            .concat(),
+        )
+        .context("Error when un-escaping JUnit output.")?;
+
+        if status.success() {
+            Ok(output)
+        } else {
+            let mut diags = Vec::new();
+            let mut new_output = Vec::new();
+
+            for line in output.lines() {
+                if line.contains("MethodSource") || line.contains("Native Method") {
+                    continue;
+                }
+
+                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
+                    if let Some(proj) = project
+                        && proj.identify(diag.file_name()).is_ok()
+                    {
+                        new_output
+                            .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
                     }
-
-                    Err(JavaFileError::FailedTests {
-                        test_results: new_output.join("\n"),
-                        diags,
-                    })
+                    diags.push(diag);
+                } else if let Ok(diag) = parser::parse_diag(line) {
+                    if let Some(proj) = project
+                        && proj.identify(diag.file_name()).is_ok()
+                    {
+                        new_output
+                            .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
+                    }
+                    diags.push(diag.into());
+                } else {
+                    new_output.push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
                 }
             }
-            Err(e) => Err(anyhow!(e).into()),
+
+            Err(JavaFileError::FailedTests {
+                test_results: new_output.join("\n"),
+                diags,
+            })
         }
     }
 

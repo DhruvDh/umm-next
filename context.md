@@ -92,6 +92,8 @@
 | `UMM_RETRIEVAL_ENDPOINT`  | Active retrieval backend URL              | Defaults to historical Deno endpoint                      | `src/config.rs`
 | `UMM_COURSE`              | Course identifier surfaced in metadata    | Defaults to `ITSC 2214`                                   | `src/config.rs`
 | `UMM_TERM`                | Academic term surfaced in metadata        | Defaults to `Fall 2022`                                   | `src/config.rs`
+| `UMM_JAVAC_TIMEOUT_SECS`  | Max seconds allowed for `javac` invocations | Defaults to `30`; larger values risk long hangs           | `src/config.rs`
+| `UMM_JAVA_TIMEOUT_SECS`   | Max seconds allowed for `java` / JUnit runs | Defaults to `60`; raise for long-running submissions      | `src/config.rs`
 | `JAVA_HOME` / `PATH`      | Locate `javac` / `java` for CLI commands  | Must resolve to a working JDK in the environment          | External toolchain        |
 
 ## High-Level Overview

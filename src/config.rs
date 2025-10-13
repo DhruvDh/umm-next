@@ -1,9 +1,12 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -11,7 +14,6 @@ use async_openai::types::ReasoningEffort;
 use postgrest::Postgrest;
 use reqwest::Client;
 use state::InitCell;
-use tokio::runtime::Runtime;
 
 use crate::retrieval::HeuristicConfig;
 
@@ -322,8 +324,6 @@ pub struct ConfigState {
     postgrest:           InitCell<Postgrest>,
     /// Shared reqwest HTTP client reused across network helpers.
     http_client:         Client,
-    /// Shared Tokio runtime for async helpers (downloads, Supabase calls).
-    runtime:             Arc<Runtime>,
     /// Loaded prompt catalog used by graders and retrieval helpers.
     prompts:             Prompts,
     /// Course identifier exposed to Supabase-backed endpoints.
@@ -338,6 +338,10 @@ pub struct ConfigState {
     retrieval_heuristic: Mutex<HeuristicConfig>,
     /// Endpoint used for active-retrieval service calls.
     retrieval_endpoint:  String,
+    /// Maximum time allowed for javac invocations.
+    javac_timeout:       Duration,
+    /// Maximum time allowed for java/JUnit invocations.
+    java_timeout:        Duration,
 }
 
 impl ConfigState {
@@ -352,7 +356,6 @@ impl ConfigState {
                 _ => None,
             };
 
-        let runtime = Runtime::new().context("Failed to create shared Tokio runtime")?;
         let http_client = Client::builder()
             // Avoid macOS dynamic store lookups that fail in sandboxed environments.
             .no_proxy()
@@ -368,12 +371,13 @@ impl ConfigState {
             .unwrap_or_else(|_| "https://umm-feedback-openai-func.deno.dev/".to_string());
 
         let retrieval_heuristic = Mutex::new(HeuristicConfig::default());
+        let javac_timeout = read_timeout_secs("UMM_JAVAC_TIMEOUT_SECS", 30);
+        let java_timeout = read_timeout_secs("UMM_JAVA_TIMEOUT_SECS", 60);
 
         Ok(Self {
             supabase,
             postgrest: InitCell::new(),
             http_client,
-            runtime: Arc::new(runtime),
             prompts,
             course,
             term,
@@ -381,6 +385,8 @@ impl ConfigState {
             active_retrieval: AtomicBool::new(false),
             retrieval_heuristic,
             retrieval_endpoint,
+            javac_timeout,
+            java_timeout,
         })
     }
 
@@ -395,11 +401,6 @@ impl ConfigState {
             .insert_header("apiKey", creds.api_key.clone());
         self.postgrest.set(client);
         Some(self.postgrest.get().clone())
-    }
-
-    /// Returns the shared Tokio runtime.
-    pub fn runtime(&self) -> Arc<Runtime> {
-        self.runtime.clone()
     }
 
     /// Returns a clone of the shared reqwest HTTP client.
@@ -522,6 +523,16 @@ impl ConfigState {
             .expect("retrieval heuristic poisoned")
             .set_full_file_ratio(value);
     }
+
+    /// Returns the configured javac timeout duration.
+    pub fn javac_timeout(&self) -> Duration {
+        self.javac_timeout
+    }
+
+    /// Returns the configured java/JUnit timeout duration.
+    pub fn java_timeout(&self) -> Duration {
+        self.java_timeout
+    }
 }
 
 /// Borrowed view of the prompt catalog that keeps the underlying configuration
@@ -609,11 +620,6 @@ pub fn reset_for_tests() {
 /// Returns the configured PostgREST client, if Supabase has been configured.
 pub fn postgrest_client() -> Option<Postgrest> {
     get().postgrest()
-}
-
-/// Returns a clone of the shared Tokio runtime.
-pub fn runtime() -> Arc<Runtime> {
-    get().runtime()
 }
 
 /// Returns a clone of the shared reqwest HTTP client.
@@ -709,4 +715,24 @@ pub fn set_active_retrieval(enabled: bool) {
 /// Returns whether active retrieval is currently enabled.
 pub fn active_retrieval_enabled() -> bool {
     get().active_retrieval_enabled()
+}
+
+/// Returns the configured javac timeout duration.
+pub fn javac_timeout() -> Duration {
+    get().javac_timeout()
+}
+
+/// Returns the configured java/JUnit timeout duration.
+pub fn java_timeout() -> Duration {
+    get().java_timeout()
+}
+
+/// Parses an environment variable into a `Duration`, falling back to
+/// `default_secs` when parsing fails or the variable is missing.
+fn read_timeout_secs(env: &str, default_secs: u64) -> Duration {
+    std::env::var(env)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(default_secs))
 }

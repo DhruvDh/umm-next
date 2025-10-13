@@ -1,9 +1,4 @@
-use std::{
-    collections::HashSet,
-    fs,
-    io::{BufRead, BufReader, Write},
-    process::Command,
-};
+use std::{collections::HashSet, ffi::OsString};
 
 use anyhow::{Context, Result, anyhow};
 use async_openai::types::{
@@ -12,12 +7,14 @@ use async_openai::types::{
 use itertools::Itertools;
 use rhai::{Array, Dynamic};
 use tabled::tables::ExtendedTable;
+use tokio::fs as async_fs;
 
 use super::results::{Grade, GradeResult};
 use crate::{
     config,
     java::{JavaFileError, Project, ProjectPaths},
     parsers::parser,
+    process::{self, StdinSource},
     retrieval::build_context_message,
     util::{classpath, java_path},
 };
@@ -98,7 +95,7 @@ impl ByUnitTestGrader {
     /// Grades by running tests, and reports how many tests pass.
     /// Final grade is the same percentage of maximum grade as the number of
     /// tests passing.
-    pub fn grade_by_tests(self) -> Result<GradeResult> {
+    pub async fn grade_by_tests(self) -> Result<GradeResult> {
         let convert_to_string = |f: Vec<Dynamic>| -> Result<Vec<String>> {
             f.iter()
                 .map(|f| match f.clone().into_string() {
@@ -248,10 +245,8 @@ impl ByUnitTestGrader {
             let mut messages = vec![initial_message.clone()];
 
             for test_file in test_files {
-                let res = match project
-                    .identify(test_file.as_str())?
-                    .test(Vec::new(), Some(&project))
-                {
+                let file = project.identify(test_file.as_str())?;
+                let res = match file.test(Vec::new(), Some(&project)).await {
                     Ok(res) => res,
                     Err(JavaFileError::FailedTests {
                         test_results,
@@ -413,7 +408,7 @@ impl UnitTestGrader {
     }
 
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
-    pub fn grade_unit_tests(&self) -> Result<GradeResult> {
+    pub async fn grade_unit_tests(&self) -> Result<GradeResult> {
         let req_name = self.get_req_name();
         let out_of = self.get_out_of();
         let target_test = self.get_target_test();
@@ -423,6 +418,7 @@ impl UnitTestGrader {
         let project = Project::new()?;
 
         eprintln!("Running Mutation tests -");
+
         let target_test: Vec<String> = target_test
             .iter()
             .map(|f| match f.clone().into_string() {
@@ -467,53 +463,65 @@ impl UnitTestGrader {
         ]
         .join(",");
 
-        let child = Command::new(java_path()?)
-            .arg("--class-path")
-            .arg(class_path.as_str())
-            .arg("org.pitest.mutationtest.commandline.MutationCoverageReport")
-            .arg("--reportDir")
-            .arg("test_reports")
-            .arg("--failWhenNoMutations")
-            .arg("true")
-            .arg("--threads")
-            .arg("6")
-            .arg("--targetClasses")
-            .arg(target_class.join(","))
-            .arg("--targetTests")
-            .arg(target_test.join(","))
-            .arg("--sourceDirs")
-            .arg(source_dirs)
-            .arg("--timestampedReports")
-            .arg("false")
-            .arg("--outputFormats")
-            .arg("HTML,CSV")
-            .arg("--mutators")
-            .arg("STRONGER")
-            .arg("--excludedMethods")
-            .arg(excluded_methods.join(","))
-            .arg("--avoidCallsTo")
-            .arg(avoid_calls_to.join(","))
-            .output()
-            .context("Failed to spawn javac process.")?;
+        let args: Vec<OsString> = vec![
+            "--class-path".into(),
+            class_path.clone().into(),
+            "org.pitest.mutationtest.commandline.MutationCoverageReport".into(),
+            "--reportDir".into(),
+            "test_reports".into(),
+            "--failWhenNoMutations".into(),
+            "true".into(),
+            "--threads".into(),
+            "6".into(),
+            "--targetClasses".into(),
+            target_class.join(",").into(),
+            "--targetTests".into(),
+            target_test.join(",").into(),
+            "--sourceDirs".into(),
+            source_dirs.into(),
+            "--timestampedReports".into(),
+            "false".into(),
+            "--outputFormats".into(),
+            "HTML,CSV".into(),
+            "--mutators".into(),
+            "STRONGER".into(),
+            "--excludedMethods".into(),
+            excluded_methods.join(",").into(),
+            "--avoidCallsTo".into(),
+            avoid_calls_to.join(",").into(),
+        ];
 
+        let java = java_path()?;
+        let collected = process::run_collect(
+            java.as_os_str(),
+            &args,
+            StdinSource::Null,
+            Some(project.paths().root_dir()),
+            &[],
+            Some(config::java_timeout()),
+        )
+        .await?;
+
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = collected;
         let prompts = config::prompts();
 
-        if child.status.success() {
-            fs::create_dir_all("test_reports")?;
-            let file = fs::File::open(
-                project
-                    .paths()
-                    .root_dir()
-                    .join("test_reports")
-                    .join("mutations.csv"),
-            )
-            .context("Could not read ./test_reports/mutations.csv file".to_string())?;
-            let reader = BufReader::new(file);
+        if status.success() {
+            let reports_dir = project.paths().root_dir().join("test_reports");
+            async_fs::create_dir_all(&reports_dir).await?;
+            let csv_path = reports_dir.join("mutations.csv");
+            let csv_bytes = async_fs::read(&csv_path)
+                .await
+                .context("Could not read ./test_reports/mutations.csv file")?;
+            let csv_contents =
+                String::from_utf8(csv_bytes).context("Failed to decode mutations.csv as utf8")?;
             let mut diags = vec![];
 
-            for line in reader.lines() {
-                let line = line?;
-                let parse_result = parser::mutation_report_row(&line)
+            for line in csv_contents.lines() {
+                let parse_result = parser::mutation_report_row(line)
                     .context("While parsing test_reports/mutations.csv")?;
 
                 if parse_result.result() == "SURVIVED" {
@@ -573,8 +581,8 @@ impl UnitTestGrader {
             })
         } else {
             let mut output = [
-                String::from_utf8(child.stderr)?,
-                String::from_utf8(child.stdout)?,
+                String::from_utf8(stderr).context("Failed to parse stderr as utf8")?,
+                String::from_utf8(stdout).context("Failed to parse stdout as utf8")?,
             ]
             .concat();
             eprintln!("{output}");
@@ -684,28 +692,31 @@ impl ByHiddenTestGrader {
 
     /// Grades using hidden tests. Test file is downloaded, ran, and then
     /// cleaned up before returning.
-    pub fn grade_by_hidden_tests(&self) -> Result<GradeResult> {
+    pub async fn grade_by_hidden_tests(&self) -> Result<GradeResult> {
         let url = self.url();
         let test_class_name = self.test_class_name();
         let out_of = self.out_of();
         let req_name = self.req_name();
 
-        let test_source = reqwest::blocking::get(&url)
+        let test_source = reqwest::get(&url)
+            .await
             .context(format!("Failed to download {url}"))?
             .bytes()
+            .await
             .context(format!("Failed to get response as bytes: {url}"))?;
 
         let root_paths = ProjectPaths::default();
         let path = root_paths
             .root_dir()
             .join(format!("{test_class_name}.java"));
-        let mut file = fs::File::create(&path)?;
-        file.write_all(&test_source)?;
+        async_fs::write(&path, &test_source)
+            .await
+            .context("Failed to write hidden test source")?;
 
         let project = match Project::new() {
             Ok(a) => a,
             Err(e) => {
-                fs::remove_file(&path)?;
+                let _ = async_fs::remove_file(&path).await;
                 return Err(e);
             }
         };
@@ -718,15 +729,17 @@ impl ByHiddenTestGrader {
             req_name,
         };
 
-        let out = match grader.grade_by_tests() {
+        let out = match grader.grade_by_tests().await {
             Ok(o) => o,
             Err(e) => {
-                fs::remove_file(&path)?;
+                let _ = async_fs::remove_file(&path).await;
                 return Err(e);
             }
         };
 
-        fs::remove_file(&path)?;
+        async_fs::remove_file(&path)
+            .await
+            .context("Failed to remove hidden test source")?;
         Ok(out)
     }
 }

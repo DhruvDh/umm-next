@@ -11,14 +11,14 @@
 
 /// Shared, runtime-initialized configuration (prompts, services, env)
 pub mod config;
-/// A module defining a bunch of constant values to be used throughout
-pub mod constants;
 // For all things related to grading see `java::grade` module.
 /// For discovering Java projects, analyzing them, and generating/executing
 /// build tasks
 pub mod java;
 /// For all parsers used
 pub mod parsers;
+/// Async process helpers shared across modules.
+pub mod process;
 /// Retrieval-mode definitions shared across languages.
 pub mod retrieval;
 /// Shared data structures reused across modules.
@@ -73,15 +73,3 @@ pub fn clean() -> Result<()> {
 
     Ok(())
 }
-
-// TODO: replace std::Command with cmd_lib
-// TODO: Lazily load all constants from rhai scripts instead
-// TODO: Fix java mod impls
-// TODO: update classpath when discovering project
-// TODO: fix grading api
-// TODO: add rhai scripting for grading
-// TODO: find a way to generate a rhai wrapper for all methods
-// TODO: add rhai scripting for project init
-// TODO: update tabled to 0.6
-// TODO: make reedline shell optional behind a feature
-// TODO: Download jars only if required OR remove jar requirement altogether.

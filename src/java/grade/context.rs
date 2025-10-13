@@ -11,6 +11,7 @@ use async_openai::types::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use tokio::runtime::Runtime;
 
 use crate::{
     config,
@@ -92,23 +93,36 @@ fn invoke_retrieval_service(
         serde_json::to_string(messages).context("Failed to serialize retrieval messages")?;
     let client = config::http_client();
     let endpoint = config::retrieval_endpoint();
-    let runtime = config::runtime();
 
-    runtime.block_on(async move {
-        let response = client
-            .post(endpoint)
-            .body(payload)
-            .send()
-            .await
-            .context("Failed to call retrieval service")?
-            .error_for_status()
-            .context("Retrieval service returned error status")?;
+    let call = perform_retrieval_request(client.clone(), endpoint.clone(), payload.clone());
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(call),
+        Err(_) => Runtime::new()
+            .context("Failed to create Tokio runtime for retrieval service")?
+            .block_on(perform_retrieval_request(client, endpoint, payload)),
+    }
+}
 
-        response
-            .json::<CreateChatCompletionResponse>()
-            .await
-            .context("Failed to deserialize retrieval response")
-    })
+/// Performs the HTTP call to the external retrieval service and returns the raw
+/// completion response.
+async fn perform_retrieval_request(
+    client: reqwest::Client,
+    endpoint: String,
+    payload: String,
+) -> Result<CreateChatCompletionResponse> {
+    let response = client
+        .post(endpoint)
+        .body(payload)
+        .send()
+        .await
+        .context("Failed to call retrieval service")?
+        .error_for_status()
+        .context("Retrieval service returned error status")?;
+
+    response
+        .json::<CreateChatCompletionResponse>()
+        .await
+        .context("Failed to deserialize retrieval response")
 }
 
 /// Resolves `LineRef`s to concrete files and expands them into inclusive
