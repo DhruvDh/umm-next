@@ -11,7 +11,7 @@ use async_openai::types::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::block_in_place};
 
 use crate::{
     config,
@@ -96,7 +96,7 @@ fn invoke_retrieval_service(
 
     let call = perform_retrieval_request(client.clone(), endpoint.clone(), payload.clone());
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle.block_on(call),
+        Ok(handle) => block_in_place(move || handle.block_on(call)),
         Err(_) => Runtime::new()
             .context("Failed to create Tokio runtime for retrieval service")?
             .block_on(perform_retrieval_request(client, endpoint, payload)),

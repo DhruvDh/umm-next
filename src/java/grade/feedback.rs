@@ -5,7 +5,7 @@ use async_openai::types::ChatCompletionRequestMessage;
 use rhai::Array;
 use serde::Serialize;
 use serde_json;
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::block_in_place};
 use uuid::Uuid;
 
 use super::results::GradeResult;
@@ -52,7 +52,7 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         // Post to the database
         let submit = insert_prompt_row(client.clone(), messages.clone());
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(submit)?,
+            Ok(handle) => block_in_place(move || handle.block_on(submit))?,
             Err(_) => Runtime::new()
                 .context("Failed to create Tokio runtime for Supabase call")?
                 .block_on(insert_prompt_row(client, messages))?,

@@ -17,7 +17,7 @@ use tabled::{
     Table,
     settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
 };
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::block_in_place};
 use typed_builder::TypedBuilder;
 
 use super::{feedback::generate_single_feedback, results::GradeResult};
@@ -606,18 +606,21 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
                 )
             })?;
 
+            let env_ref = &openai_env;
             let slo_responses = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => handle.block_on(async {
-                    generate_slo_responses(
-                        &project,
-                        &source_files,
-                        &test_files,
-                        &project_title,
-                        &project_description,
-                        &enabled_slos,
-                        &openai_env,
-                    )
-                    .await
+                Ok(handle) => block_in_place(|| {
+                    handle.block_on(async {
+                        generate_slo_responses(
+                            &project,
+                            &source_files,
+                            &test_files,
+                            &project_title,
+                            &project_description,
+                            &enabled_slos,
+                            env_ref,
+                        )
+                        .await
+                    })
                 })?,
                 Err(_) => Runtime::new()
                     .context("Failed to create Tokio runtime for SLO feedback generation")?
@@ -629,21 +632,21 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
                             &project_title,
                             &project_description,
                             &enabled_slos,
-                            &openai_env,
+                            env_ref,
                         )
                         .await
                     })?,
             };
 
-            let combined_report = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => handle.block_on(async {
-                    generate_combined_slo_report(slo_responses, &openai_env).await
+            let combined_report = match (tokio::runtime::Handle::try_current(), slo_responses) {
+                (Ok(handle), responses) => block_in_place(move || {
+                    handle.block_on(async move {
+                        generate_combined_slo_report(responses, env_ref).await
+                    })
                 })?,
-                Err(_) => Runtime::new()
+                (Err(_), responses) => Runtime::new()
                     .context("Failed to create Tokio runtime for SLO report generation")?
-                    .block_on(async {
-                        generate_combined_slo_report(slo_responses, &openai_env).await
-                    })?,
+                    .block_on(async { generate_combined_slo_report(responses, env_ref).await })?,
             };
 
             test_cases.push(
