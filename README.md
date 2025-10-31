@@ -29,7 +29,9 @@ Once you are done, just type `cargo install --git=https://github.com/DhruvDh/umm
 
 ## Auto-grading
 
-Also allows for running auto-grading scripts based on [Rhai](https://rhai.rs/book/about/index.html).
+`umm` now runs grading flows written in [Rune](https://rune-rs.github.io/). Ship a script with an async `main` function and execute it with `umm java grade path/to/script.rn`. A minimal example lives in `examples/sample.rn`.
+
+The notes below document the legacy Rhai prototype and will be updated as the Rune API settles.
 
 ### Introduction
 

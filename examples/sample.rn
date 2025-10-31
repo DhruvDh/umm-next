@@ -1,0 +1,42 @@
+use umm::java::{Project, DocsGrader, ByUnitTestGrader, DiffGrader, DiffCase, show_results};
+
+pub async fn main() {
+    let project = Project::new()?; // returns a Result; ? is fine
+
+    let docs = DocsGrader::new()
+        .project(project.clone())
+        .files(["pyramid_scheme.LinkedTree"])
+        .req_name("documentation")
+        .out_of(10.0)
+        .penalty(3.0)
+        .run()
+        .await?;
+
+    let tests = ByUnitTestGrader::new()
+        .project(project.clone())
+        .test_files(["pyramid_scheme.LinkedTreeTest"])
+        .expected_tests(
+            [
+                "pyramid_scheme.LinkedTreeTest#testGetRootElement",
+                "pyramid_scheme.LinkedTreeTest#testAddChild",
+            ],
+        )
+        .req_name("unit-tests")
+        .out_of(20.0)
+        .run()
+        .await?;
+
+    let diff = DiffGrader::new()
+        .project(project)
+        .file("Main")
+        .req_name("hello-world")
+        .out_of(5.0)
+        .ignore_case(true)
+        .add_case(DiffCase::new("Hello, world!\n"))
+        .run()
+        .await?;
+
+    show_results([docs, tests, diff]);
+
+    Ok(()) // returning a Result value is OK even without an annotation
+}

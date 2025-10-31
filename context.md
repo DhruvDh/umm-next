@@ -148,7 +148,7 @@
   - `docs.rs` — Doclint-driven grader.
   - `feedback.rs` — FEEDBACK file + Supabase/OpenAI persistence helpers.
   - `gradescope.rs` — Gradescope payload generation and SLO prompts.
-  - `query.rs` — Tree-sitter query graders; still uses Rhai `FnPtr` filters pending refactor.
+  - `query.rs` — Tree-sitter query graders; filter predicates now use native Rust closures and Vec outputs.
   - `results.rs` — `GradeResult`, `Grade`, `LineRef`, and supporting types.
   - `tests.rs` — Unit/hidden test graders and PIT hooks.
   - `diagnostics.rs` — Diagnostic structs shared across graders.
@@ -156,12 +156,14 @@
 - `src/java/queries/` — String resources / helpers for Tree-sitter SCM patterns.
 - `src/java/util.rs` — Java-specific toolchain and path helpers (`classpath`, `sourcepath`).
 - `src/util.rs` — Shared helpers (`umm_path`, `find_files`).
-- `src/lib.rs` — Library API exposing the disabled `grade()` entry (and a stubbed
-  `clean()` for backward compatibility with older tooling).
-- `src/main.rs` — CLI wiring via `bpaf`; dispatches to library commands and prints the disabled `grade` message.
+- `src/lib.rs` — Crate root exporting configuration, Java helpers, process utilities, retrieval, scripting runtime, and shared types.
+- `src/main.rs` — CLI wiring via `bpaf`; dispatches to library commands and executes Rune grading scripts.
 - `src/config.rs` — Runtime/env bootstrap: loads prompts, Supabase metadata, HTTP client, retrieval endpoint, and active-retrieval flag.
 - `src/retrieval.rs` — Retrieval modes (`Full`, `Heuristic`, `Active`) and the `RetrievalFormatter` trait implemented by language modules.
+- `src/scripting/mod.rs` — Rune VM bootstrapper (`Context`, `Unit`, `Vm`) plus the entrypoint used by `umm java grade`.
+- `src/scripting/java.rs` — `umm::java` Rune module: builders for Docs/Unit/Diff graders, `Project` helpers, and `show_results`.
 - `fixtures/java/` — Java fixtures for integration tests; initialize submodules with `git submodule update --init --recursive`.
+- `examples/sample.rn` — Reference Rune script demonstrating Docs/Unit/Diff graders and `show_results`.
 
 ## Important Code References
 
@@ -178,8 +180,8 @@
     - Operate via `Project::new()` and instance-scoped `ProjectPaths`.
     - Assume required JUnit jars are already on the classpath (no downloads).
 - `grade` (main):
-    - Returns a clear “temporarily unavailable” error by design.
-    - See **Scripting Strategy** for the branch-only Python prototype.
+    - Executes a Rune script via `scripting::run_file`, expecting an async `pub fn main() -> Result<(), String>`.
+    - Surface script or grader failures with contextual error messages.
 
 ## Paths & Configuration Model
 
@@ -196,22 +198,15 @@
 
 ## Scripting Strategy (Decision Record)
 
-- **Problem**: Re-enable `umm grade <script.py>` without reviving the Rhai engine.
-- **Options considered**:
-  1. **Rune runtime** — native scripting via Rune (design retained for reference; deferred).
-  2. **Embedded Python runtime** — bundle Python into the Rust binary (trial on `try-python-scripting`).
-- **Current state**: Decision pending; `main` keeps `grade` disabled while the Python prototype lives on its branch.
-- **Next milestone**: Ship a minimal `grade` flow behind a feature flag with a smoke test, compare against the Rune design, then choose the path.
-
-### Option snapshots
-
-- **Embedded Python (trial)** — see Appendix A for dev-only build/test notes (PyO3 + PyOxidizer + maturin helpers).
-- **Rune (deferred)** — retain the integration sketch below to avoid losing the design context.
-
-### Deferred — Rune Integration Sketch
-
-- Rune remains the long-term scripting target; design notes retained for continuity.
-- Do not resurrect Rhai helpers; defer implementation until after the Python evaluation concludes.
+- **Decision**: Rune is the primary scripting surface on `main`. The CLI executes `.rn` files directly through `scripting::run_file`.
+- **Implementation**:
+  - `Context::with_default_modules()` boots the Rune standard library; `umm::java` registers project helpers and grader builders.
+  - Scripts expose an async `pub fn main() -> Result<(), String>` and compose `DocsGrader`, `ByUnitTestGrader`, and `DiffGrader` builders.
+  - Results are rendered with `show_results`, matching the CLI table output.
+- **Legacy**: The embedded-Python prototype remains on `try-python-scripting` for reference but is no longer authoritative.
+- **Next steps**:
+  - Expose additional graders (hidden tests, mutation) and feedback generators.
+  - Offer query-graders with Rune predicates once filters migrate off Rhai-specific APIs.
 
 ## Prompts, Env, and Global Config
 

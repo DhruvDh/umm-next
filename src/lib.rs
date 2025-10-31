@@ -19,18 +19,12 @@ pub mod java;
 pub mod process;
 /// Retrieval-mode definitions shared across languages.
 pub mod retrieval;
+/// Scripting runtime integrations.
+pub mod scripting;
 /// Shared data structures reused across modules.
 pub mod types;
 /// Utility functions for convenience
 pub mod util;
-use anyhow::Result;
 
 /// Defined for convenience
 type Dict = std::collections::HashMap<String, String>;
-
-/// Prints the result of grading
-pub fn grade(_name_or_path: &str) -> Result<()> {
-    anyhow::bail!(
-        "The grade command is temporarily unavailable while Rhai support is being removed."
-    )
-}

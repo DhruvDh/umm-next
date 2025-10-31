@@ -70,12 +70,15 @@ impl ByUnitTestGrader {
     }
 
     /// Setter for test_files
-    pub fn set_test_files<I, S>(mut self, test_files: I) -> Self
+    pub fn set_test_files<I>(mut self, test_files: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.test_files = test_files.into_iter().map(Into::into).collect();
+        self.test_files = test_files
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 
@@ -85,12 +88,15 @@ impl ByUnitTestGrader {
     }
 
     /// Setter for expected_tests
-    pub fn set_expected_tests<I, S>(mut self, expected_tests: I) -> Self
+    pub fn set_expected_tests<I>(mut self, expected_tests: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.expected_tests = expected_tests.into_iter().map(Into::into).collect();
+        self.expected_tests = expected_tests
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 
@@ -498,42 +504,54 @@ impl UnitTestGrader {
     }
 
     /// A setter for the list of test classes to run.
-    pub fn set_target_test<I, S>(mut self, target_test: I) -> Self
+    pub fn set_target_test<I>(mut self, target_test: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.target_test = target_test.into_iter().map(Into::into).collect();
+        self.target_test = target_test
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 
     /// A setter for the list of classes to mutate.
-    pub fn set_target_class<I, S>(mut self, target_class: I) -> Self
+    pub fn set_target_class<I>(mut self, target_class: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.target_class = target_class.into_iter().map(Into::into).collect();
+        self.target_class = target_class
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 
     /// A setter for the list of methods to exclude from mutation.
-    pub fn set_excluded_methods<I, S>(mut self, excluded_methods: I) -> Self
+    pub fn set_excluded_methods<I>(mut self, excluded_methods: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.excluded_methods = excluded_methods.into_iter().map(Into::into).collect();
+        self.excluded_methods = excluded_methods
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 
     /// A setter for the list of classes to avoid mutating.
-    pub fn set_avoid_calls_to<I, S>(mut self, avoid_calls_to: I) -> Self
+    pub fn set_avoid_calls_to<I>(mut self, avoid_calls_to: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator,
+        I::Item: AsRef<str>,
     {
-        self.avoid_calls_to = avoid_calls_to.into_iter().map(Into::into).collect();
+        self.avoid_calls_to = avoid_calls_to
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
         self
     }
 

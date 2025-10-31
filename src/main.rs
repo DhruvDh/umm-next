@@ -14,13 +14,13 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bpaf::*;
 use dotenvy::dotenv;
 use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
-use umm::{grade, java::Project};
+use umm::{java::Project, scripting};
 
 /// Updates binary based on github releases
 fn update() -> Result<()> {
@@ -187,7 +187,11 @@ async fn main() -> Result<()> {
                 let out = file.doc_check().await?;
                 println!("{out}");
             }
-            JavaCmd::Grade(g) => grade(&g)?,
+            JavaCmd::Grade(g) => {
+                scripting::run_file(&g)
+                    .await
+                    .with_context(|| format!("Failed to execute Rune script `{}`", g))?;
+            }
             JavaCmd::Info => Project::new()?.info()?,
         },
         Cmd::Update => {
