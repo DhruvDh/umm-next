@@ -221,7 +221,7 @@ impl DiffGrader {
         );
 
         let file = self.project.identify(&self.file)?;
-        let prompt_set = config::prompts();
+        let prompt_set = config::java_prompts();
         let mut prompt_section = None;
         let mut first_failure_reason = None;
 
@@ -456,7 +456,7 @@ impl DiffGrader {
     /// Renders the instructor/student messages used when diff grading fails.
     fn build_error_messages(
         &self,
-        prompts: &config::Prompts,
+        prompts: &config::JavaPrompts,
         body: String,
         diags: Option<Vec<LineRef>>,
     ) -> Result<Vec<ChatCompletionRequestMessage>> {

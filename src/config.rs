@@ -17,9 +17,10 @@ use state::InitCell;
 
 use crate::retrieval::HeuristicConfig;
 
-/// Holds prompt strings that will eventually become script-configurable.
+/// Java-specific prompt strings (placeholder for future multi-language
+/// support).
 #[derive(Clone)]
-pub struct Prompts {
+pub struct JavaPrompts {
     /// Intro portion of the primary system prompt.
     system_message_intro: String,
     /// Outro portion of the primary system prompt.
@@ -53,7 +54,7 @@ pub struct Prompts {
 /// Prompt truncation length for generated feedback payloads.
 pub const PROMPT_TRUNCATE: usize = 60_000;
 
-impl Prompts {
+impl JavaPrompts {
     /// Load prompt templates from disk.
     fn load() -> Self {
         let system_message_intro = include_str!("java/prompts/system_message_intro.md").to_string();
@@ -324,8 +325,8 @@ pub struct ConfigState {
     postgrest:           InitCell<Postgrest>,
     /// Shared reqwest HTTP client reused across network helpers.
     http_client:         Client,
-    /// Loaded prompt catalog used by graders and retrieval helpers.
-    prompts:             Prompts,
+    /// Loaded Java prompt catalog used by graders and retrieval helpers.
+    java_prompts:        JavaPrompts,
     /// Course identifier exposed to Supabase-backed endpoints.
     course:              String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
@@ -361,7 +362,7 @@ impl ConfigState {
             .no_proxy()
             .build()
             .context("Failed to construct shared HTTP client")?;
-        let prompts = Prompts::load();
+        let prompts = JavaPrompts::load();
 
         let course = std::env::var("UMM_COURSE").unwrap_or_else(|_| "ITSC 2214".to_string());
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
@@ -378,7 +379,7 @@ impl ConfigState {
             supabase,
             postgrest: InitCell::new(),
             http_client,
-            prompts,
+            java_prompts: prompts,
             course,
             term,
             openai: OpenAiEnv::from_env(),
@@ -423,9 +424,9 @@ impl ConfigState {
         &self.term
     }
 
-    /// Returns the prompt bundle.
-    pub fn prompts(&self) -> &Prompts {
-        &self.prompts
+    /// Returns the Java prompt bundle.
+    pub fn java_prompts(&self) -> &JavaPrompts {
+        &self.java_prompts
     }
 
     /// Returns the OpenAI configuration, if all required environment variables
@@ -535,15 +536,15 @@ impl ConfigState {
     }
 }
 
-/// Borrowed view of the prompt catalog that keeps the underlying configuration
-/// alive.
-pub struct PromptsRef(ConfigHandle);
+/// Borrowed view of the Java prompt catalog that keeps the underlying
+/// configuration alive.
+pub struct JavaPromptsRef(ConfigHandle);
 
-impl std::ops::Deref for PromptsRef {
-    type Target = Prompts;
+impl std::ops::Deref for JavaPromptsRef {
+    type Target = JavaPrompts;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.prompts
+        &self.0.java_prompts
     }
 }
 
@@ -642,9 +643,9 @@ pub fn term() -> String {
     get().term.clone()
 }
 
-/// Returns the configured prompts.
-pub fn prompts() -> PromptsRef {
-    PromptsRef(get())
+/// Returns the configured Java prompts.
+pub fn java_prompts() -> JavaPromptsRef {
+    JavaPromptsRef(get())
 }
 
 /// Returns the configured OpenAI environment, if set.

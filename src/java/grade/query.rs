@@ -536,7 +536,7 @@ impl QueryGrader {
             self.reason.to_string()
         };
 
-        let prompt_set = config::prompts();
+        let prompt_set = config::java_prompts();
         let result: Vec<String> = match self.run_query() {
             Ok(r) => {
                 let r: Array = r.cast();

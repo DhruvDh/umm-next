@@ -12,10 +12,13 @@ use tokio::fs as async_fs;
 use super::results::{Grade, GradeResult};
 use crate::{
     config,
-    java::{JavaFileError, Project, ProjectPaths, parsers::parser},
+    java::{
+        JavaFileError, Project, ProjectPaths,
+        parsers::parser,
+        util::{classpath, java_path},
+    },
     process::{self, StdinSource},
     retrieval::build_context_message,
-    util::{classpath, java_path},
 };
 #[derive(Clone, Default)]
 /// Grades by running tests, and reports how many tests pass.
@@ -225,7 +228,7 @@ impl ByUnitTestGrader {
             (updated_stacktrace, all_diags)
         };
 
-        let system_message = config::prompts().system_message().to_string();
+        let system_message = config::java_prompts().system_message().to_string();
         let initial_message = new_system_message(system_message.clone());
 
         if !reasons.is_empty() {
@@ -506,7 +509,7 @@ impl UnitTestGrader {
             stdout,
             stderr,
         } = collected;
-        let prompts = config::prompts();
+        let prompts = config::java_prompts();
 
         if status.success() {
             let reports_dir = project.paths().root_dir().join("test_reports");

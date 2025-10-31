@@ -55,7 +55,7 @@ fn compose_retrieval_messages(
     proj: &Project,
     grader_output: &str,
 ) -> Result<Vec<ChatCompletionRequestMessage>> {
-    let prompts = config::prompts();
+    let prompts = config::java_prompts();
     let java_file_names = proj.files().iter().map(File::proper_name).join(", ");
     let synthesized_outline = proj.describe();
     let outro = prompts

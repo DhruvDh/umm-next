@@ -294,7 +294,7 @@ async fn generate_slo_responses(
     enabled_slos: &HashSet<String>,
     openai: &OpenAiEnv,
 ) -> Result<Vec<(&'static str, Result<CreateChatCompletionResponse, OpenAIError>)>> {
-    let prompts = config::prompts();
+    let prompts = config::java_prompts();
     let slos = vec![
         (
             "slo_algorithmic_solutions",

@@ -20,7 +20,7 @@ use dotenvy::dotenv;
 use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
-use umm::{clean, grade, java::Project};
+use umm::{grade, java::Project};
 
 /// Updates binary based on github releases
 fn update() -> Result<()> {
@@ -53,8 +53,6 @@ enum Cmd {
     DocCheck(String),
     /// Grade a file
     Grade(String),
-    /// Clean the project artifacts
-    Clean,
     /// Print information about the project
     Info,
     /// Update the command
@@ -107,11 +105,6 @@ fn options() -> Cmd {
         .command("grade")
         .help("Grade your work");
 
-    let clean = pure(Cmd::Clean)
-        .to_options()
-        .command("clean")
-        .help("Cleans the build folder, library folder, and vscode settings");
-
     let info = pure(Cmd::Info)
         .to_options()
         .command("info")
@@ -127,10 +120,8 @@ fn options() -> Cmd {
         .command("exit")
         .help("Exit the program");
 
-    let cmd = construct!([
-        run, check, test, doc_check, grade, clean, info, update, exit
-    ])
-    .fallback(Cmd::Exit);
+    let cmd =
+        construct!([run, check, test, doc_check, grade, info, update, exit]).fallback(Cmd::Exit);
 
     cmd.to_options().descr("Build tool for novices").run()
 }
@@ -184,7 +175,6 @@ async fn main() -> Result<()> {
             println!("{out}");
         }
         Cmd::Grade(g) => grade(&g)?,
-        Cmd::Clean => clean()?,
         Cmd::Info => Project::new()?.info()?,
         Cmd::Update => {
             match update() {

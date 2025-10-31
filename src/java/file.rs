@@ -20,9 +20,9 @@ use crate::{
             INTERFACE_DECLARATION_QUERY, INTERFACE_METHODS_QUERY, INTERFACENAME_QUERY,
             MAIN_METHOD_QUERY, METHOD_CALL_QUERY, PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
         },
+        util::{classpath, java_path, javac_path, sourcepath},
     },
     process::{self, StdinSource},
-    util::{classpath, java_path, javac_path, sourcepath},
 };
 
 /// Normalizes captured snippets by trimming whitespace and flattening newlines.

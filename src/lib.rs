@@ -23,8 +23,7 @@ pub mod retrieval;
 pub mod types;
 /// Utility functions for convenience
 pub mod util;
-use anyhow::{Context, Result};
-use java::ProjectPaths;
+use anyhow::Result;
 use rhai::Engine;
 
 /// Defined for convenience
@@ -41,33 +40,4 @@ pub fn grade(_name_or_path: &str) -> Result<()> {
     anyhow::bail!(
         "The grade command is temporarily unavailable while Rhai support is being removed."
     )
-}
-
-/// Deletes all java compiler artefacts
-pub fn clean() -> Result<()> {
-    let paths = ProjectPaths::default();
-    let build_dir = paths.build_dir();
-    let lib_dir = paths.lib_dir();
-    let root_dir = paths.root_dir();
-
-    if build_dir.exists() {
-        std::fs::remove_dir_all(build_dir)
-            .with_context(|| format!("Could not delete {}", build_dir.display()))?;
-    }
-    if lib_dir.exists() {
-        std::fs::remove_dir_all(lib_dir)
-            .with_context(|| format!("Could not delete {}", lib_dir.display()))?;
-    }
-    let vscode_settings = root_dir.join(".vscode/settings.json");
-    if vscode_settings.exists() {
-        std::fs::remove_file(&vscode_settings)
-            .with_context(|| format!("Could not delete {}", vscode_settings.display()))?;
-    }
-    let vscode_tasks = root_dir.join(".vscode/tasks.json");
-    if vscode_tasks.exists() {
-        std::fs::remove_file(&vscode_tasks)
-            .with_context(|| format!("Could not delete {}", vscode_tasks.display()))?;
-    }
-
-    Ok(())
 }

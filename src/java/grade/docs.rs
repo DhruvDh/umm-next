@@ -104,7 +104,7 @@ impl DocsGrader {
     pub async fn grade_docs(self) -> Result<GradeResult> {
         let mut diags = vec![];
         let mut all_diags = vec![];
-        let prompts = config::prompts();
+        let prompts = config::java_prompts();
         let files: Vec<String> = self
             .files
             .iter()

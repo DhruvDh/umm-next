@@ -79,7 +79,6 @@
 | `umm check <Class>`         | Java class name                   | Compiles and prints diagnostics               | `0` on success; non-zero on compiler errors     |
 | `umm test <TestClass> …`    | Test class, optional test names   | Runs JUnit on existing classpath              | `0` on pass; non-zero on failing tests          |
 | `umm doc-check <Class>`     | Java class name                   | Runs `javac -Xdoclint` for documentation lint | `0` on clean; non-zero on warnings/errors       |
-| `umm clean`                 | —                                 | Removes build/lib dirs and `.vscode/*`        | `0` on success                                  |
 | `umm grade <...>` (main)    | Any args                          | None; prints disabled message                 | Always prints “grade is temporarily unavailable”|
 
 ## Environment Variables (main)
@@ -124,7 +123,8 @@
 
 - Removed the `umm_derive` proc-macro crate and eliminated generated `_script` wrappers across the codebase.
 - Disabled the Rhai script entry path; `lib::grade` returns a clear “temporarily unavailable” error on main.
-- Deleted VSCode tasks/settings generators while keeping `clean()` support for removing leftovers.
+- Deleted VSCode tasks/settings generators; manual cleanup remains available via
+  `Project::clean_paths`, but the CLI `clean` command has been removed.
 - Introduced `ProjectPaths` and routed all compile/run/test logic through instance-scoped paths; removed legacy globals from `src/constants.rs`.
 - Added `src/config.rs` to centralize runtime bootstrapping, prompt loading, Supabase access (cached via `state::InitCell<Postgrest>`), shared HTTP client, and the active-retrieval toggle (`AtomicBool`).
 - Removed the bundled JAR download workflow; `Project` no longer fetches artifacts and instead respects whatever is on the classpath.
@@ -152,9 +152,11 @@
   - `tests.rs` — Unit/hidden test graders and PIT hooks.
   - `diagnostics.rs` — Diagnostic structs shared across graders.
   - `mod.rs` — Grader module exports.
-- `src/java/queries.rs` — String resources / helpers for Tree-sitter SCM patterns.
-- `src/util.rs` — Shared path and filesystem helpers (`classpath`, `sourcepath`, discovery utilities).
-- `src/lib.rs` — Library API exposing `clean()` and the disabled `grade()` entry; surfaces helpers consumed by the CLI.
+- `src/java/queries/` — String resources / helpers for Tree-sitter SCM patterns.
+- `src/java/util.rs` — Java-specific toolchain and path helpers (`classpath`, `sourcepath`).
+- `src/util.rs` — Shared helpers (`umm_path`, `find_files`).
+- `src/lib.rs` — Library API exposing the disabled `grade()` entry (and a stubbed
+  `clean()` for backward compatibility with older tooling).
 - `src/main.rs` — CLI wiring via `bpaf`; dispatches to library commands and prints the disabled `grade` message.
 - `src/config.rs` — Runtime/env bootstrap: loads prompts, Supabase metadata, HTTP client, retrieval endpoint, and active-retrieval flag.
 - `src/retrieval.rs` — Retrieval modes (`Full`, `Heuristic`, `Active`) and the `RetrievalFormatter` trait implemented by language modules.
@@ -163,28 +165,25 @@
 ## Important Code References
 
 - Paths & project layout: `src/java/paths.rs`, `src/java/project.rs`, `src/java/mod.rs`
-- Classpath/sourcepath helpers: `src/util.rs`
+- Classpath/sourcepath helpers: `src/java/util.rs`
 - CLI wiring: `src/main.rs`
 - Graders & feedback: `src/java/grade/*`
 - Retrieval heuristics: `src/retrieval.rs`, `src/java/grade/context.rs`
 - Env/services/prompts/runtime: `src/config.rs`
-- Cleanup helpers: `src/lib.rs` (`clean()`)
 
 ## CLI Behavior (Post-Refactor)
 
 - `run <ClassWithMain>` / `check <Class>` / `test <TestClass> [tests...]` / `doc-check <Class>`:
-  - Operate via `Project::new()` and instance-scoped `ProjectPaths`.
-  - Assume required JUnit jars are already on the classpath (no downloads).
-- `clean`:
-  - Removes build/lib directories and `.vscode/*` artifacts using `ProjectPaths`.
+    - Operate via `Project::new()` and instance-scoped `ProjectPaths`.
+    - Assume required JUnit jars are already on the classpath (no downloads).
 - `grade` (main):
-  - Returns a clear “temporarily unavailable” error by design.
-  - See **Scripting Strategy** for the branch-only Python prototype.
+    - Returns a clear “temporarily unavailable” error by design.
+    - See **Scripting Strategy** for the branch-only Python prototype.
 
 ## Paths & Configuration Model
 
 - `ProjectPaths` instances supply all path derivations; avoid global statics.
-- Helpers like `classpath(&ProjectPaths)` and `sourcepath(&ProjectPaths)` live in `src/util.rs`.
+- Helpers like `classpath(&ProjectPaths)` and `sourcepath(&ProjectPaths)` live in `src/java/util.rs`.
 - Configuration lives in `src/config.rs`, which wraps the shared runtime, HTTP client, prompt catalog, and Supabase metadata; it lazily caches the PostgREST client via a `state::InitCell<Postgrest>` and tracks active retrieval with an `AtomicBool`.
 
 ## Java Analysis Pipeline (At a Glance)
@@ -219,7 +218,7 @@
 - Shared APIs (selected):
   - `config::runtime() -> Arc<Runtime>` — shared Tokio runtime.
   - `config::http_client() -> reqwest::Client` — shared HTTP client (proxy disabled for sandbox compatibility).
-  - `config::prompts() -> PromptsRef` — read-only access to the loaded prompt catalog.
+  - `config::java_prompts() -> JavaPromptsRef` — read-only access to the loaded Java prompt catalog.
   - `config::postgrest_client() -> Option<Postgrest>` — lazily caches the Supabase PostgREST client using `state::InitCell<Postgrest>`.
   - `config::retrieval_endpoint() -> String` — returns the configured active-retrieval endpoint.
   - `config::heuristic_defaults()` / `set_heuristic_defaults(...)` — read/update snippet heuristics.
@@ -230,14 +229,13 @@
 ## Design Rationale & Invariants
 
 - Paths must remain instance-scoped; avoid reintroducing globals.
-- CLI cleanup is limited to removing artifacts—no automatic generation of editor configs.
 - `grade` stays disabled until the scripting story is ready; any interim work must keep the failure mode obvious.
 - Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
 
 ## Definition of Done (main)
 
 - [ ] `cargo fmt && cargo clippy --all-targets` run cleanly.
-- [ ] `umm run/test/doc-check/clean` succeed against a sample project with JDK + JUnit jars available.
+- [ ] `umm run/test/doc-check` succeed against a sample project with JDK + JUnit jars available.
 - [ ] Status banner is updated (date + scripting decision) when behavior changes.
 - [ ] Module Map lists only files present on `main` (no branch-only paths).
 - [ ] Active-retrieval behavior documented as `AtomicBool` with helpers (`set_active_retrieval`, `active_retrieval_enabled`).
@@ -349,7 +347,8 @@ Recent Cleanups (reference)
 - Avoid reintroducing global path state—everything should route through `ProjectPaths`.
 - `Project::new()` leverages the process runtime; be mindful of handle cloning before spawning tasks.
 - JUnit/PITest expectations rely on the caller’s classpath; ensure mutation runs can write `test_reports/mutations.csv` under the project root.
-- `clean()` still removes `.vscode` artifacts but does not recreate them.
+- Legacy `clean()` is retained only as an erroring stub; use
+  `Project::clean_paths` if manual cleanup is required.
 
 ## Quick Test Checklist
 
@@ -368,7 +367,6 @@ Recent Cleanups (reference)
 - CLI wiring: `src/main.rs`
 - Graders & feedback: `src/java/grade/*`
 - Env/services/prompts/runtime: `src/config.rs`
-- Cleanup helpers: `src/lib.rs` (`clean()`)
 
 ## Doc Maintenance Commands
 
@@ -444,10 +442,11 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 ## Doc Change Log
 
-- 2025-10-16: Relocated Java-only prompt/query assets and the PEG parser helpers
-  into `src/java/` (to prep for multi-language separation) and left TODO
-  breadcrumbs on `ProjectPaths` / `Project` to surface configurable workspace
-  layouts when a typed builder lands.
+- 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
+  `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped
+  config prompts under `java_prompts()`; left TODO breadcrumbs on
+  `ProjectPaths` / `Project` to surface configurable workspace layouts when a
+  typed builder lands.
 - 2025-10-15: Documented the `src/java/file.rs` refactor—`File::new` now delegates to
   helper functions (`parse_source`, `detect_file_identity`, `collect_test_methods`,
   `build_description`, plus interface/class section helpers) to keep construction,
