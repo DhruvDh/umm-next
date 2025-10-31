@@ -15,172 +15,13 @@ use postgrest::Postgrest;
 use reqwest::Client;
 use state::InitCell;
 
-use crate::retrieval::HeuristicConfig;
-
-/// Java-specific prompt strings (placeholder for future multi-language
-/// support).
-#[derive(Clone)]
-pub struct JavaPrompts {
-    /// Intro portion of the primary system prompt.
-    system_message_intro: String,
-    /// Outro portion of the primary system prompt.
-    system_message_outro: String,
-    /// Full system prompt assembled from intro/outro.
-    system_message: String,
-    /// Intro prompt used when active retrieval is enabled.
-    retrieval_message_intro: String,
-    /// Outro prompt used when active retrieval is enabled.
-    retrieval_message_outro: String,
-    /// SLO template for Algorithmic Solutions feedback.
-    algorithmic_solutions_slo: String,
-    /// SLO template for Code Readability feedback.
-    code_readability_slo: String,
-    /// SLO template for comments feedback.
-    comments_written_slo: String,
-    /// SLO template for error-handling feedback.
-    error_handling_slo: String,
-    /// SLO template for logic feedback.
-    logic_slo: String,
-    /// SLO template for naming conventions feedback.
-    naming_conventions_slo: String,
-    /// SLO template for OOP feedback.
-    object_oriented_programming_slo: String,
-    /// SLO template for syntax feedback.
-    syntax_slo: String,
-    /// SLO template for testing feedback.
-    testing_slo: String,
-}
+use crate::{
+    java::config::{JavaConfig, JavaPrompts},
+    retrieval::HeuristicConfig,
+};
 
 /// Prompt truncation length for generated feedback payloads.
 pub const PROMPT_TRUNCATE: usize = 60_000;
-
-impl JavaPrompts {
-    /// Load prompt templates from disk.
-    fn load() -> Self {
-        let system_message_intro = include_str!("java/prompts/system_message_intro.md").to_string();
-        let system_message_outro = include_str!("java/prompts/system_message_outro.md").to_string();
-        let system_message = format!("{}\n{}", system_message_intro, system_message_outro);
-
-        let retrieval_message_intro =
-            include_str!("java/prompts/retrieval_system_message_intro.md").into();
-        let retrieval_message_outro =
-            include_str!("java/prompts/retrieval_system_message_outro.md").into();
-
-        Self {
-            system_message_intro,
-            system_message_outro,
-            system_message,
-            retrieval_message_intro,
-            retrieval_message_outro,
-            algorithmic_solutions_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/algorithmic_solutions_quant.md"),
-            ),
-            code_readability_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/code_readability_written_com.md"),
-            ),
-            comments_written_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/comments_written_com.md"),
-            ),
-            error_handling_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/error_handling_verification.md"),
-            ),
-            logic_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/logic_programming.md"),
-            ),
-            naming_conventions_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/naming_written_com.md"),
-            ),
-            object_oriented_programming_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/oop_programming.md"),
-            ),
-            syntax_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/syntax_programming.md"),
-            ),
-            testing_slo: format!(
-                include_str!("java/prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("java/prompts/slos/testing_verification.md"),
-            ),
-        }
-    }
-
-    /// Returns the primary system prompt delivered to ChatGPT.
-    pub fn system_message(&self) -> &str {
-        &self.system_message
-    }
-
-    /// Returns the intro segment of the system prompt.
-    pub fn system_message_intro(&self) -> &str {
-        &self.system_message_intro
-    }
-
-    /// Returns the outro segment of the system prompt.
-    pub fn system_message_outro(&self) -> &str {
-        &self.system_message_outro
-    }
-
-    /// Returns the retrieval system message intro.
-    pub fn retrieval_message_intro(&self) -> &str {
-        &self.retrieval_message_intro
-    }
-
-    /// Returns the retrieval system message outro.
-    pub fn retrieval_message_outro(&self) -> &str {
-        &self.retrieval_message_outro
-    }
-
-    /// Returns the algorithmic solutions SLO prompt.
-    pub fn algorithmic_solutions_slo(&self) -> &str {
-        &self.algorithmic_solutions_slo
-    }
-
-    /// Returns the code readability SLO prompt.
-    pub fn code_readability_slo(&self) -> &str {
-        &self.code_readability_slo
-    }
-
-    /// Returns the comments written SLO prompt.
-    pub fn comments_written_slo(&self) -> &str {
-        &self.comments_written_slo
-    }
-
-    /// Returns the error handling SLO prompt.
-    pub fn error_handling_slo(&self) -> &str {
-        &self.error_handling_slo
-    }
-
-    /// Returns the logic SLO prompt.
-    pub fn logic_slo(&self) -> &str {
-        &self.logic_slo
-    }
-
-    /// Returns the naming conventions SLO prompt.
-    pub fn naming_conventions_slo(&self) -> &str {
-        &self.naming_conventions_slo
-    }
-
-    /// Returns the object oriented programming SLO prompt.
-    pub fn object_oriented_programming_slo(&self) -> &str {
-        &self.object_oriented_programming_slo
-    }
-
-    /// Returns the syntax SLO prompt.
-    pub fn syntax_slo(&self) -> &str {
-        &self.syntax_slo
-    }
-
-    /// Returns the testing SLO prompt.
-    pub fn testing_slo(&self) -> &str {
-        &self.testing_slo
-    }
-}
 
 /// Supabase credentials loaded from the environment, if available.
 #[derive(Clone)]
@@ -325,8 +166,8 @@ pub struct ConfigState {
     postgrest:           InitCell<Postgrest>,
     /// Shared reqwest HTTP client reused across network helpers.
     http_client:         Client,
-    /// Loaded Java prompt catalog used by graders and retrieval helpers.
-    java_prompts:        JavaPrompts,
+    /// Java-specific configuration bundle.
+    java_config:         JavaConfig,
     /// Course identifier exposed to Supabase-backed endpoints.
     course:              String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
@@ -339,10 +180,6 @@ pub struct ConfigState {
     retrieval_heuristic: Mutex<HeuristicConfig>,
     /// Endpoint used for active-retrieval service calls.
     retrieval_endpoint:  String,
-    /// Maximum time allowed for javac invocations.
-    javac_timeout:       Duration,
-    /// Maximum time allowed for java/JUnit invocations.
-    java_timeout:        Duration,
 }
 
 impl ConfigState {
@@ -363,6 +200,12 @@ impl ConfigState {
             .build()
             .context("Failed to construct shared HTTP client")?;
         let prompts = JavaPrompts::load();
+        let java_config = JavaConfig::new(
+            prompts,
+            HeuristicConfig::default(),
+            read_timeout_secs("UMM_JAVAC_TIMEOUT_SECS", 30),
+            read_timeout_secs("UMM_JAVA_TIMEOUT_SECS", 60),
+        );
 
         let course = std::env::var("UMM_COURSE").unwrap_or_else(|_| "ITSC 2214".to_string());
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
@@ -371,23 +214,19 @@ impl ConfigState {
             .map(|value| value.trim().to_owned())
             .unwrap_or_else(|_| "https://umm-feedback-openai-func.deno.dev/".to_string());
 
-        let retrieval_heuristic = Mutex::new(HeuristicConfig::default());
-        let javac_timeout = read_timeout_secs("UMM_JAVAC_TIMEOUT_SECS", 30);
-        let java_timeout = read_timeout_secs("UMM_JAVA_TIMEOUT_SECS", 60);
+        let retrieval_heuristic = Mutex::new(java_config.retrieval_defaults());
 
         Ok(Self {
             supabase,
             postgrest: InitCell::new(),
             http_client,
-            java_prompts: prompts,
+            java_config,
             course,
             term,
             openai: OpenAiEnv::from_env(),
             active_retrieval: AtomicBool::new(false),
             retrieval_heuristic,
             retrieval_endpoint,
-            javac_timeout,
-            java_timeout,
         })
     }
 
@@ -426,7 +265,7 @@ impl ConfigState {
 
     /// Returns the Java prompt bundle.
     pub fn java_prompts(&self) -> &JavaPrompts {
-        &self.java_prompts
+        self.java_config.prompts()
     }
 
     /// Returns the OpenAI configuration, if all required environment variables
@@ -527,12 +366,17 @@ impl ConfigState {
 
     /// Returns the configured javac timeout duration.
     pub fn javac_timeout(&self) -> Duration {
-        self.javac_timeout
+        self.java_config.javac_timeout()
     }
 
     /// Returns the configured java/JUnit timeout duration.
     pub fn java_timeout(&self) -> Duration {
-        self.java_timeout
+        self.java_config.java_timeout()
+    }
+
+    /// Returns the Java configuration bundle.
+    pub fn java_config(&self) -> &JavaConfig {
+        &self.java_config
     }
 }
 
@@ -544,7 +388,18 @@ impl std::ops::Deref for JavaPromptsRef {
     type Target = JavaPrompts;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.java_prompts
+        self.0.java_prompts()
+    }
+}
+
+/// Borrowed view of the Java configuration bundle.
+pub struct JavaConfigRef(ConfigHandle);
+
+impl std::ops::Deref for JavaConfigRef {
+    type Target = JavaConfig;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.java_config()
     }
 }
 
@@ -646,6 +501,11 @@ pub fn term() -> String {
 /// Returns the configured Java prompts.
 pub fn java_prompts() -> JavaPromptsRef {
     JavaPromptsRef(get())
+}
+
+/// Returns the configured Java configuration bundle.
+pub fn java_config() -> JavaConfigRef {
+    JavaConfigRef(get())
 }
 
 /// Returns the configured OpenAI environment, if set.

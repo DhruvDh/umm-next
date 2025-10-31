@@ -137,6 +137,7 @@
 - **Scope note:** The Module Map lists **main** only. Branch-only files (e.g., the Python prototype) are documented in the Appendix.
 
 - `src/java/mod.rs` — Module root re-exporting the Java subsystems (`file`, `parser`, `paths`, `project`, `grade`).
+- `src/java/config.rs` — Java-specific configuration bundle (prompts, retrieval defaults, timeouts).
 - `src/java/paths.rs` — `ProjectPaths` definition plus accessors for `root`, `src`, `build`, `test`, `lib`, `.umm`, and separators.
 - `src/java/parser.rs` — Tree-sitter Java parser wrapper; owns `Parser`, per-file `Tree` caching, and helpers for executing SCM query patterns.
 - `src/java/file.rs` — `FileType`, `File`, `JavaFileError`, and compile/run/test/doc-check orchestration atop `ProjectPaths`.
@@ -218,7 +219,8 @@
 - Shared APIs (selected):
   - `config::runtime() -> Arc<Runtime>` — shared Tokio runtime.
   - `config::http_client() -> reqwest::Client` — shared HTTP client (proxy disabled for sandbox compatibility).
-  - `config::java_prompts() -> JavaPromptsRef` — read-only access to the loaded Java prompt catalog.
+  - `config::java_config() -> JavaConfigRef` — read-only access to the Java config bundle (prompts, timeouts).
+  - `config::java_prompts() -> JavaPromptsRef` — convenience wrapper for the Java prompt catalog.
   - `config::postgrest_client() -> Option<Postgrest>` — lazily caches the Supabase PostgREST client using `state::InitCell<Postgrest>`.
   - `config::retrieval_endpoint() -> String` — returns the configured active-retrieval endpoint.
   - `config::heuristic_defaults()` / `set_heuristic_defaults(...)` — read/update snippet heuristics.
@@ -444,7 +446,8 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 - 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
   `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped
-  config prompts under `java_prompts()`; left TODO breadcrumbs on
+  config prompts under a `JavaConfig` bundle (`java_prompts()` accessor retained);
+  left TODO breadcrumbs on
   `ProjectPaths` / `Project` to surface configurable workspace layouts when a
   typed builder lands.
 - 2025-10-15: Documented the `src/java/file.rs` refactor—`File::new` now delegates to

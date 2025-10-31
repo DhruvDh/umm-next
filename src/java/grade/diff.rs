@@ -456,7 +456,7 @@ impl DiffGrader {
     /// Renders the instructor/student messages used when diff grading fails.
     fn build_error_messages(
         &self,
-        prompts: &config::JavaPrompts,
+        prompts: &crate::java::JavaPrompts,
         body: String,
         diags: Option<Vec<LineRef>>,
     ) -> Result<Vec<ChatCompletionRequestMessage>> {

@@ -1,6 +1,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
+/// Java-specific configuration helpers.
+pub mod config;
 /// File type definitions and helpers.
 pub mod file;
 /// Java-specific grading utilities.
@@ -18,6 +20,7 @@ pub mod queries;
 /// Java-specific filesystem and toolchain helpers.
 pub mod util;
 
+pub use config::{JavaConfig, JavaPrompts};
 pub use file::{File, FileType, JavaFileError};
 pub use parser::Parser;
 pub use paths::ProjectPaths;
