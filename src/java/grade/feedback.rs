@@ -2,7 +2,6 @@ use std::fs;
 
 use anyhow::{Context, Result, anyhow};
 use async_openai::types::ChatCompletionRequestMessage;
-use rhai::Array;
 use serde::Serialize;
 use serde_json;
 use tokio::{runtime::Runtime, task::block_in_place};
@@ -72,12 +71,15 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
     }
 }
 
-/// Generates a FEEDBACK file after prompting ChatGPT for feedback on an array
-/// of results.
-pub fn generate_feedback(results: Array) -> Result<()> {
+/// Generates a FEEDBACK file after prompting ChatGPT for feedback on a
+/// collection of results.
+pub fn generate_feedback<I>(results: I) -> Result<()>
+where
+    I: IntoIterator<Item = GradeResult>,
+{
     let mut feedback = vec!["## Understanding Your Autograder Results\n".to_string()];
 
-    for result in results.iter().map(|f| f.clone().cast::<GradeResult>()) {
+    for result in results.into_iter() {
         let fb = generate_single_feedback(&result)?;
         feedback.push(fb);
     }

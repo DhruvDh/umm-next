@@ -1,9 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_openai::types::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
-use itertools::Itertools;
-use rhai::Array;
 use tabled::{
     Table,
     settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
@@ -21,7 +19,7 @@ pub struct DocsGrader {
     /// * `project`: the project to grade
     pub project:  Project,
     /// * `files`: the files to grade
-    pub files:    Array,
+    pub files:    Vec<String>,
     /// * `out_of`: the total points for the requirement
     pub out_of:   f64,
     /// * `req_name`: the name of the requirement
@@ -35,7 +33,7 @@ impl Default for DocsGrader {
     fn default() -> Self {
         Self {
             project:  Project::default(),
-            files:    Array::new(),
+            files:    Vec::new(),
             out_of:   0.0,
             req_name: String::new(),
             penalty:  3.0,
@@ -56,13 +54,17 @@ impl DocsGrader {
     }
 
     /// Getter for files
-    pub fn files(&self) -> Array {
-        self.files.clone()
+    pub fn files(&self) -> &[String] {
+        &self.files
     }
 
     /// Setter for files
-    pub fn set_files(mut self, files: Array) -> Self {
-        self.files = files;
+    pub fn set_files<I, S>(mut self, files: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.files = files.into_iter().map(Into::into).collect();
         self
     }
 
@@ -105,14 +107,7 @@ impl DocsGrader {
         let mut diags = vec![];
         let mut all_diags = vec![];
         let prompts = config::java_prompts();
-        let files: Vec<String> = self
-            .files
-            .iter()
-            .map(|f| match f.clone().into_string() {
-                Ok(n) => Ok(n),
-                Err(e) => Err(anyhow!("files array has something that's not a string: {}", e)),
-            })
-            .try_collect()?;
+        let files = self.files.clone();
         let out_of = self.out_of;
         let mut outputs = vec![];
         for name in &files {

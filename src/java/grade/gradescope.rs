@@ -10,7 +10,6 @@ use async_openai::{
         CreateChatCompletionRequest, CreateChatCompletionResponse,
     },
 };
-use rhai::{Array, Dynamic, Map};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use tabled::{
@@ -25,6 +24,49 @@ use crate::{
     config::{self, OpenAiEnv},
     java::{File, Project},
 };
+
+/// Configuration options that control how Gradescope output is rendered.
+#[derive(Debug, Clone)]
+pub struct GradescopeConfig {
+    /// Source files to include when generating SLO summaries.
+    pub source_files:        Vec<String>,
+    /// Test files to include when generating SLO summaries.
+    pub test_files:          Vec<String>,
+    /// Title displayed alongside SLO feedback.
+    pub project_title:       String,
+    /// Description displayed alongside SLO feedback.
+    pub project_description: String,
+    /// Threshold (0.0-1.0) for marking test cases as passing.
+    pub pass_threshold:      f64,
+    /// Whether to emit a textual overview table to stderr.
+    pub show_table:          bool,
+    /// Whether to emit the Gradescope JSON artifact.
+    pub results_json:        bool,
+    /// Whether to post per-test feedback via Supabase.
+    pub feedback:            bool,
+    /// Whether to write the Gradescope JSON to the local workspace for
+    /// debugging.
+    pub debug:               bool,
+    /// Set of enabled SLO identifiers that should generate feedback.
+    pub enabled_slos:        HashSet<String>,
+}
+
+impl Default for GradescopeConfig {
+    fn default() -> Self {
+        Self {
+            source_files:        Vec::new(),
+            test_files:          Vec::new(),
+            project_title:       String::new(),
+            project_description: String::new(),
+            pass_threshold:      0.7,
+            show_table:          true,
+            results_json:        false,
+            feedback:            false,
+            debug:               false,
+            enabled_slos:        HashSet::new(),
+        }
+    }
+}
 /// Represents output format settings for Gradescope submissions.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -428,112 +470,24 @@ async fn generate_slo_responses(
     Ok(slo_responses)
 }
 
-/// Print grade result
+/// Print grade results to stderr and optionally emit a Gradescope JSON
+/// artifact.
 ///
-/// * `results`: array of GradeResults to print in a table.
-/// * `gradescope_config`: map of gradescope configuration options, which can
-///   contain:
-///     - `source_files`: array of source files to provide feedback on in the
-///       submission. Defaults to empty array.
-///     - `test_files`: array of test files to provide feedback on in the
-///       submission. Defaults to empty array.
-///     - `project_title`: title of the project. Defaults to empty string.
-///     - `project_description`: description of the project. Defaults to empty
-///       string.
-///     - `pass_threshold`: threshold for passing the project. Defaults to 0.7.
-///     - `show_table`: whether to show the grading table. Defaults to true.
-///     - `results_json`: whether to write the gradescope results in JSON
-///       format. Defaults to false.
-///     - `feedback`: whether to provide feedback on penalties to students.
-///       Defaults to false.
-///     - `leaderboard`: whether to produce leaderboard entries. Also produces
-///       relevant SLO feedback. Defaults to false.
-///     - `debug`: whether to write gradescope JSON within the current
-///       directory. Defaults to false.
-///     - `slo_algorithmic_solutions`: whether to provide feedback on
-///       Algorithmic Solutions SLO. Defaults to false.
-///     - `slo_code_readability`: whether to provide feedback on Code
-///       Readability and Formatting SLO. Defaults to false.
-///     - `slo_comments`: whether to provide feedback on Comments SLO. Defaults
-///       to false.
-///     - `slo_error_handling`: whether to provide feedback on Error Handling
-///       SLO. Defaults to false.
-///     - `slo_logic`: whether to provide feedback on Logic SLO. Defaults to
-///       false.
-///     - `slo_naming_conventions`: whether to provide feedback on Naming
-///       Conventions SLO. Defaults to false.
-///     - `slo_oop_programming`: whether to provide feedback on Object Oriented
-///       Programming SLO. Defaults to false.
-///     - `slo_syntax`: whether to provide feedback on Syntax SLO. Defaults to
-///       false.
-///     - `slo_testing`: whether to provide feedback on Testing SLO. Defaults to
-///       false.
-pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
-    let results: Vec<GradeResult> = results
-        .iter()
-        .map(|f| f.clone().cast::<GradeResult>())
-        .collect();
-    let source_files = gradescope_config
-        .get("source_files")
-        .unwrap_or(&Dynamic::from(Array::new()))
-        .clone()
-        .cast::<Array>()
-        .iter()
-        .map(|f| f.clone().cast::<String>())
-        .collect::<Vec<String>>();
-
-    let test_files = gradescope_config
-        .get("test_files")
-        .unwrap_or(&Dynamic::from(Array::new()))
-        .clone()
-        .cast::<Array>()
-        .iter()
-        .map(|f| f.clone().cast::<String>())
-        .collect::<Vec<String>>();
-
-    let project_title = gradescope_config
-        .get("project_title")
-        .unwrap_or(&Dynamic::from(String::new()))
-        .clone()
-        .cast::<String>();
-    let project_description = gradescope_config
-        .get("project_description")
-        .unwrap_or(&Dynamic::from(String::new()))
-        .clone()
-        .cast::<String>();
-    let pass_threshold = gradescope_config
-        .get("pass_threshold")
-        .unwrap_or(&Dynamic::from(0.7))
-        .clone()
-        .cast::<f64>();
-
-    let get_or_default = |f: &str, d: bool| -> bool {
-        gradescope_config
-            .get(f)
-            .unwrap_or(&Dynamic::from(d))
-            .clone()
-            .cast::<bool>()
-    };
-    let show_table = get_or_default("show_table", true);
-    let gradescope_json = get_or_default("results_json", false);
-    let gradescope_feedback = get_or_default("feedback", false);
-    let gradescope_debug = get_or_default("debug", false);
-
-    let enabled_slos: HashSet<String> = vec![
-        "slo_algorithmic_solutions",
-        "slo_code_readability",
-        "slo_comments",
-        "slo_error_handling",
-        "slo_logic",
-        "slo_naming_conventions",
-        "slo_oop_programming",
-        "slo_syntax",
-        "slo_testing",
-    ]
-    .into_iter()
-    .filter(|&slo| get_or_default(slo, false))
-    .map(String::from)
-    .collect();
+/// * `results`: collection of requirement-level grades to render.
+/// * `config`: strongly typed configuration that replaces the legacy Rhai map.
+pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Result<()> {
+    let GradescopeConfig {
+        source_files,
+        test_files,
+        project_title,
+        project_description,
+        pass_threshold,
+        show_table,
+        results_json: gradescope_json,
+        feedback: gradescope_feedback,
+        debug: gradescope_debug,
+        enabled_slos,
+    } = config;
 
     let (grade, out_of) = results
         .iter()
@@ -563,11 +517,9 @@ pub fn show_result(results: Array, gradescope_config: Map) -> Result<()> {
     if gradescope_json {
         let project = Project::new()?;
         let mut test_cases = vec![];
-        for result in results {
-            let result = result.clone();
-
+        for result in &results {
             let feedback = if gradescope_feedback {
-                generate_single_feedback(&result)?
+                generate_single_feedback(result)?
             } else {
                 String::new()
             };
