@@ -61,9 +61,9 @@
    - `cargo check`
    - `cargo fmt && cargo clippy --all-targets`
 3. **Run core commands** *(requires JDK + JUnit jars on your classpath)*
-   - `umm run <ClassWithMain>`
-   - `umm test <TestClass> [tests...]`
-   - `umm doc-check <Class>`
+   - `umm java run <ClassWithMain>`
+   - `umm java test <TestClass> [tests...]`
+   - `umm java doc-check <Class>`
    - `umm grade <...>` → expect the “temporarily unavailable” message on `main`.
 4. **Read the code in this order**
    - Paths: `src/java/paths.rs`
@@ -75,10 +75,10 @@
 
 | Command                     | Inputs                            | Side-effects                                | Exit conditions                                |
 |-----------------------------|-----------------------------------|----------------------------------------------|------------------------------------------------|
-| `umm run <ClassWithMain>`   | Java class with `main`            | Compiles and runs via `Project::run`          | `0` on success; non-zero on compile/run failure |
-| `umm check <Class>`         | Java class name                   | Compiles and prints diagnostics               | `0` on success; non-zero on compiler errors     |
-| `umm test <TestClass> …`    | Test class, optional test names   | Runs JUnit on existing classpath              | `0` on pass; non-zero on failing tests          |
-| `umm doc-check <Class>`     | Java class name                   | Runs `javac -Xdoclint` for documentation lint | `0` on clean; non-zero on warnings/errors       |
+| `umm java run <ClassWithMain>`   | Java class with `main`            | Compiles and runs via `Project::run`          | `0` on success; non-zero on compile/run failure |
+| `umm java check <Class>`         | Java class name                   | Compiles and prints diagnostics               | `0` on success; non-zero on compiler errors     |
+| `umm java test <TestClass> …`    | Test class, optional test names   | Runs JUnit on existing classpath              | `0` on pass; non-zero on failing tests          |
+| `umm java doc-check <Class>`     | Java class name                   | Runs `javac -Xdoclint` for documentation lint | `0` on clean; non-zero on warnings/errors       |
 | `umm grade <...>` (main)    | Any args                          | None; prints disabled message                 | Always prints “grade is temporarily unavailable”|
 
 ## Environment Variables (main)
@@ -174,7 +174,7 @@
 
 ## CLI Behavior (Post-Refactor)
 
-- `run <ClassWithMain>` / `check <Class>` / `test <TestClass> [tests...]` / `doc-check <Class>`:
+- `java run <ClassWithMain>` / `java check <Class>` / `java test <TestClass> [tests...]` / `java doc-check <Class>`:
     - Operate via `Project::new()` and instance-scoped `ProjectPaths`.
     - Assume required JUnit jars are already on the classpath (no downloads).
 - `grade` (main):
@@ -237,7 +237,7 @@
 ## Definition of Done (main)
 
 - [ ] `cargo fmt && cargo clippy --all-targets` run cleanly.
-- [ ] `umm run/test/doc-check` succeed against a sample project with JDK + JUnit jars available.
+- [ ] `umm java run/test/doc-check` succeed against a sample project with JDK + JUnit jars available.
 - [ ] Status banner is updated (date + scripting decision) when behavior changes.
 - [ ] Module Map lists only files present on `main` (no branch-only paths).
 - [ ] Active-retrieval behavior documented as `AtomicBool` with helpers (`set_active_retrieval`, `active_retrieval_enabled`).
@@ -357,9 +357,9 @@ Recent Cleanups (reference)
 - `cargo check` — should pass without warnings.
 - `cargo fmt` — format before handoff.
 - `cargo clippy --all-targets` — minimum lint bar.
-- `umm run <ClassWithMain>` — runs the Java class with discovered paths.
-- `umm test <TestClass> [tests...]` — uses existing classpath; ensure JUnit jars are present locally.
-- `umm doc-check <Class>` — runs `javac -Xdoclint`.
+- `umm java run <ClassWithMain>` — runs the Java class with discovered paths.
+- `umm java test <TestClass> [tests...]` — uses existing classpath; ensure JUnit jars are present locally.
+- `umm java doc-check <Class>` — runs `javac -Xdoclint`.
 - `umm grade <...>` — returns the disabled-message on main; use the branch prototype only for the Python trial.
 
 ## Contact Points (Authoritative)
