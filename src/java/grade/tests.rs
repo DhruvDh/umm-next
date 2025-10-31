@@ -2,24 +2,50 @@ use std::{collections::HashSet, ffi::OsString};
 
 use anyhow::{Context, Result, anyhow};
 use async_openai::types::{
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+    ChatCompletionRequestUserMessageArgs,
 };
-use itertools::Itertools;
 use rhai::{Array, Dynamic};
 use tabled::tables::ExtendedTable;
 use tokio::fs as async_fs;
 
-use super::results::{Grade, GradeResult};
+use super::{
+    diagnostics::MutationDiagnostic,
+    results::{Grade, GradeResult},
+};
 use crate::{
     config,
     java::{
-        JavaFileError, Project, ProjectPaths,
+        File, JavaFileError, Project, ProjectPaths,
         parsers::parser,
         util::{classpath, java_path},
     },
     process::{self, StdinSource},
     retrieval::build_context_message,
+    types::LineRef,
 };
+
+/// Aggregated result of running a single test file.
+struct TestRunOutcome {
+    /// Number of tests that passed inside the file.
+    tests_passed: f64,
+    /// Total number of tests executed inside the file.
+    tests_total:  f64,
+    /// Prompt messages to append to the overall feedback.
+    messages:     Vec<ChatCompletionRequestMessage>,
+}
+
+/// Normalized configuration extracted from the Rhai mutation grader inputs.
+struct MutationInputs {
+    /// Fully qualified test classes to run.
+    target_tests:     Vec<String>,
+    /// Source classes subject to mutation testing.
+    target_classes:   Vec<String>,
+    /// Methods to ignore when mutating.
+    excluded_methods: Vec<String>,
+    /// Classes whose calls should be avoided during mutation.
+    avoid_calls_to:   Vec<String>,
+}
 #[derive(Clone, Default)]
 /// Grades by running tests, and reports how many tests pass.
 /// Final grade is the same percentage of maximum grade as the number of tests
@@ -98,229 +124,326 @@ impl ByUnitTestGrader {
     /// Final grade is the same percentage of maximum grade as the number of
     /// tests passing.
     pub async fn grade_by_tests(self) -> Result<GradeResult> {
-        let convert_to_string = |f: Vec<Dynamic>| -> Result<Vec<String>> {
-            f.iter()
-                .map(|f| match f.clone().into_string() {
-                    Ok(n) => Ok(n),
-                    Err(e) => {
-                        Err(anyhow!("test_files array has something that's not a string: {}", e))
-                    }
-                })
-                .try_collect()
-        };
+        let ByUnitTestGrader {
+            test_files,
+            expected_tests,
+            project,
+            out_of,
+            req_name,
+        } = self;
 
-        let project = self.project.clone();
-        let out_of = self.out_of;
-        let req_name = self.req_name;
-        let test_files: Vec<String> = convert_to_string(self.test_files)?;
-        let expected_tests: Vec<String> = convert_to_string(self.expected_tests)?;
+        let prompts = config::java_prompts();
+        let test_files = Self::array_to_strings("test_files", test_files)
+            .context("While decoding configured test files")?;
+        let expected_tests = Self::array_to_strings("expected_tests", expected_tests)
+            .context("While decoding expected test names")?;
+        let files = Self::resolve_test_files(&project, &test_files)
+            .context("While resolving test files for execution")?;
 
-        let mut reasons = {
-            let mut reasons = vec![];
-            let mut actual_tests = vec![];
-            let mut expected_tests = expected_tests;
-            expected_tests.sort();
-
-            for test_file in &test_files {
-                let test_file = project.identify(test_file)?;
-
-                actual_tests.append(&mut test_file.test_methods());
-            }
-            actual_tests.sort();
-
-            if !expected_tests.is_empty() {
-                let expected_full: HashSet<&str> = expected_tests
-                    .iter()
-                    .filter(|value| value.contains('#'))
-                    .map(|value| value.as_str())
-                    .collect();
-                let expected_methods: HashSet<&str> = expected_tests
-                    .iter()
-                    .filter(|value| !value.contains('#'))
-                    .map(|value| value.as_str())
-                    .collect();
-
-                for expected in &expected_tests {
-                    let method_name = expected
-                        .split_once('#')
-                        .map(|(_, method)| method)
-                        .unwrap_or(expected.as_str());
-                    let missing = if expected.contains('#') {
-                        !actual_tests.contains(expected)
-                    } else {
-                        !actual_tests.iter().any(|actual| {
-                            actual
-                                .split_once('#')
-                                .map(|(_, method)| method)
-                                .unwrap_or(actual.as_str())
-                                == method_name
-                        })
-                    };
-                    if missing {
-                        reasons.push(format!("- {method_name} not found."));
-                    }
-                }
-
-                for actual in &actual_tests {
-                    let method_name = actual
-                        .split_once('#')
-                        .map(|(_, method)| method)
-                        .unwrap_or(actual.as_str());
-                    let expected_match = expected_full.contains(actual.as_str())
-                        || expected_methods.contains(method_name);
-                    if !expected_match {
-                        reasons.push(format!("- Unexpected test called {method_name}"));
-                    }
-                }
-            }
-
-            reasons
-        };
-
-        let new_user_message = |content: String| {
-            let mut content = content;
-            if content.len() > config::PROMPT_TRUNCATE {
-                content.truncate(config::PROMPT_TRUNCATE);
-                content.push_str("...[TRUNCATED]");
-            }
-
-            ChatCompletionRequestUserMessageArgs::default()
-                .content(content)
-                .name("Student".to_string())
-                .build()
-                .unwrap()
-                .into()
-        };
-        let new_system_message = |content: String| {
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content(content)
-                .name("Instructor".to_string())
-                .build()
-                .unwrap()
-                .into()
-        };
-
-        let process_junit_stacktrace = |stacktrace: String| {
-            let mut updated_stacktrace = Vec::new();
-            let mut all_diags = Vec::new();
-
-            for line in stacktrace.lines() {
-                if line.contains("MethodSource") || line.contains("Native Method") {
-                    continue;
-                }
-
-                if line.contains("Test run finished after") {
-                    break;
-                }
-
-                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                    if project.identify(&diag.file_name).is_ok() {
-                        updated_stacktrace
-                            .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
-                    }
-                    all_diags.push(diag);
-                } else {
-                    updated_stacktrace
-                        .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
-                }
-            }
-
-            (updated_stacktrace, all_diags)
-        };
-
-        let system_message = config::java_prompts().system_message().to_string();
-        let initial_message = new_system_message(system_message.clone());
+        let mut reasons = Self::expected_mismatches(&files, &expected_tests);
+        let system_prompt = prompts.system_message().to_string();
+        let system_message = Self::build_system_message(system_prompt.clone())
+            .context("Failed to build initial system message")?;
 
         if !reasons.is_empty() {
             reasons.push("Tests will not be run until above is fixed.".into());
-            let reasons = reasons.join("\n");
-            let messages = vec![initial_message, new_user_message(reasons.clone())];
-            Ok(GradeResult {
+            let reasons_body = reasons.join("\n");
+            let user_message = Self::build_user_message(reasons_body.clone())
+                .context("Failed to build expected-test failure message")?;
+
+            return Ok(GradeResult {
                 requirement: req_name,
                 grade:       Grade::new(0.0, out_of),
-                reason:      reasons,
-                prompt:      Some(messages),
-            })
+                reason:      reasons_body,
+                prompt:      Some(vec![system_message, user_message]),
+            });
+        }
+
+        let mut total_passed = 0.0;
+        let mut total_tests = 0.0;
+        let mut messages = vec![system_message];
+
+        for file in &files {
+            let outcome = Self::run_tests_for_file(&project, file)
+                .await
+                .with_context(|| format!("While executing tests in {}", file.proper_name()))?;
+            total_passed += outcome.tests_passed;
+            total_tests += outcome.tests_total;
+            messages.extend(outcome.messages);
+        }
+
+        let grade_value = if total_tests > 0.0 {
+            (total_passed / total_tests) * out_of
         } else {
-            let mut num_tests_passed = 0.0;
-            let mut num_tests_total = 0.0;
-            let mut messages = vec![initial_message.clone()];
+            0.0
+        };
 
-            for test_file in test_files {
-                let file = project.identify(test_file.as_str())?;
-                let res = match file.test(Vec::new(), Some(&project)).await {
-                    Ok(res) => res,
-                    Err(JavaFileError::FailedTests {
-                        test_results,
-                        diags,
-                    }) => {
-                        let (updated_stacktrace, _) =
-                            process_junit_stacktrace(test_results.clone());
+        Ok(GradeResult {
+            requirement: req_name,
+            grade:       Grade::new(grade_value, out_of),
+            reason:      format!("- {total_passed}/{total_tests} tests passing."),
+            prompt:      Some(messages),
+        })
+    }
 
-                        let grader_output = updated_stacktrace.join("\n");
-                        messages.extend(vec![
-                            new_user_message(format!(
-                                "Failed tests -\n```\n{}\n```",
-                                grader_output
-                            )),
-                            build_context_message(&project, Some(grader_output), diags)?,
-                        ]);
+    /// Converts a Rhai array into owned strings with annotated conversion
+    /// errors.
+    fn array_to_strings(label: &str, values: Array) -> Result<Vec<String>> {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value.into_string().map_err(|err| {
+                    anyhow!("{label}[{index}] expected string-compatible value: {err}")
+                })
+            })
+            .collect()
+    }
 
-                        test_results
-                    }
-                    Err(JavaFileError::Unknown(e)) => {
-                        let out = format!("Unknown error -\n```\n{:#?}\n```", e);
-                        messages.push(new_user_message(out.clone()));
-                        out
-                    }
-                    Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
-                        let out = format!("Compiler error -\n```\n{}\n```", stacktrace);
-                        messages.extend(vec![
-                            new_user_message(out.clone()),
-                            build_context_message(&project, None, diags)?,
-                        ]);
-                        out
-                    }
-                    Err(JavaFileError::AtRuntime { output, diags }) => {
-                        let out = format!("Error at runtime -\n```\n{}\n```", output);
-                        messages.extend(vec![
-                            new_user_message(out.clone()),
-                            build_context_message(&project, None, diags)?,
-                        ]);
-                        out
-                    }
-                };
-                let mut current_tests_passed = 0.0;
-                let mut current_tests_total = 0.0;
+    /// Resolves string-based test file names into `File` handles.
+    fn resolve_test_files(project: &Project, names: &[String]) -> Result<Vec<File>> {
+        names
+            .iter()
+            .map(|name| {
+                project
+                    .identify(name)
+                    .with_context(|| format!("Failed to identify test file \"{name}\""))
+            })
+            .collect()
+    }
 
-                for line in res.lines() {
-                    let parse_result =
-                        parser::num_tests_passed(line).context("While parsing Junit summary table");
-                    if let Ok(n) = parse_result {
-                        current_tests_passed = n as f64;
-                    }
-                    let parse_result =
-                        parser::num_tests_found(line).context("While parsing Junit summary table");
-                    if let Ok(n) = parse_result {
-                        current_tests_total = n as f64;
-                    }
-                }
+    /// Compares expected test names against discovered tests and reports
+    /// mismatches.
+    fn expected_mismatches(files: &[File], expected_tests: &[String]) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if expected_tests.is_empty() {
+            return reasons;
+        }
 
-                num_tests_passed += current_tests_passed;
-                num_tests_total += current_tests_total;
-            }
-            let grade = if num_tests_total != 0.0 {
-                (num_tests_passed / num_tests_total) * out_of
+        let mut actual_tests = Vec::new();
+        for file in files {
+            actual_tests.extend(file.test_methods());
+        }
+        actual_tests.sort();
+
+        let mut expected = expected_tests.to_vec();
+        expected.sort();
+
+        let expected_full: HashSet<&str> = expected
+            .iter()
+            .filter(|value| value.contains('#'))
+            .map(|value| value.as_str())
+            .collect();
+        let expected_methods: HashSet<&str> = expected
+            .iter()
+            .filter(|value| !value.contains('#'))
+            .map(|value| value.as_str())
+            .collect();
+
+        for expected_entry in &expected {
+            let method_name = expected_entry
+                .split_once('#')
+                .map(|(_, method)| method)
+                .unwrap_or(expected_entry.as_str());
+            let missing = if expected_entry.contains('#') {
+                !actual_tests.contains(expected_entry)
             } else {
-                0.0
+                !actual_tests.iter().any(|actual| {
+                    actual
+                        .split_once('#')
+                        .map(|(_, method)| method)
+                        .unwrap_or(actual.as_str())
+                        == method_name
+                })
             };
 
-            Ok(GradeResult {
-                requirement: req_name,
-                grade:       Grade::new(grade, out_of),
-                reason:      format!("- {num_tests_passed}/{num_tests_total} tests passing."),
-                prompt:      Some(messages),
-            })
+            if missing {
+                reasons.push(format!("- {method_name} not found."));
+            }
+        }
+
+        for actual in &actual_tests {
+            let method_name = actual
+                .split_once('#')
+                .map(|(_, method)| method)
+                .unwrap_or(actual.as_str());
+            let expected_match =
+                expected_full.contains(actual.as_str()) || expected_methods.contains(method_name);
+            if !expected_match {
+                reasons.push(format!("- Unexpected test called {method_name}"));
+            }
+        }
+
+        reasons
+    }
+
+    /// Builds a user message suitable for inclusion in prompts, truncating if
+    /// required.
+    fn build_user_message(mut content: String) -> Result<ChatCompletionRequestMessage> {
+        if content.len() > config::PROMPT_TRUNCATE {
+            content.truncate(config::PROMPT_TRUNCATE);
+            content.push_str("...[TRUNCATED]");
+        }
+
+        ChatCompletionRequestUserMessageArgs::default()
+            .content(content)
+            .name("Student".to_string())
+            .build()
+            .map(Into::into)
+            .map_err(|err| anyhow!("Failed to build user message: {err}"))
+    }
+
+    /// Builds a system message from the supplied content.
+    fn build_system_message(content: String) -> Result<ChatCompletionRequestMessage> {
+        ChatCompletionRequestSystemMessageArgs::default()
+            .content(content)
+            .name("Instructor".to_string())
+            .build()
+            .map(Into::into)
+            .map_err(|err| anyhow!("Failed to build system message: {err}"))
+    }
+
+    /// Normalizes JUnit stacktraces, removing external frames and decoding
+    /// escapes.
+    fn process_junit_stacktrace(
+        project: &Project,
+        stacktrace: &str,
+    ) -> (Vec<String>, Vec<LineRef>) {
+        let mut updated = Vec::new();
+        let mut diags = Vec::new();
+
+        for line in stacktrace.lines() {
+            if line.contains("MethodSource") || line.contains("Native Method") {
+                continue;
+            }
+
+            if line.contains("Test run finished after") {
+                break;
+            }
+
+            if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
+                if project.contains(&diag.file_name) {
+                    updated.push(Self::unescape_stacktrace_line(line));
+                }
+                diags.push(diag);
+            } else {
+                updated.push(Self::unescape_stacktrace_line(line));
+            }
+        }
+
+        (updated, diags)
+    }
+
+    /// Replaces escaped characters emitted by JUnit with literal values.
+    fn unescape_stacktrace_line(line: &str) -> String {
+        line.replace("\\\\", "\\").replace("\\\"", "\"")
+    }
+
+    /// Parses the JUnit summary table to collect total and passing test counts.
+    fn parse_summary_counts(summary: &str) -> (f64, f64) {
+        let mut passed = 0.0;
+        let mut total = 0.0;
+        for line in summary.lines() {
+            if let Ok(value) = parser::num_tests_passed(line) {
+                passed = value as f64;
+            }
+            if let Ok(value) = parser::num_tests_found(line) {
+                total = value as f64;
+            }
+        }
+        (passed, total)
+    }
+
+    /// Runs the given test file and returns aggregated output and prompt
+    /// messages.
+    async fn run_tests_for_file(project: &Project, file: &File) -> Result<TestRunOutcome> {
+        match file.test(Vec::new(), Some(project)).await {
+            Ok(output) => {
+                let (tests_passed, tests_total) = Self::parse_summary_counts(&output);
+                Ok(TestRunOutcome {
+                    tests_passed,
+                    tests_total,
+                    messages: Vec::new(),
+                })
+            }
+            Err(JavaFileError::FailedTests {
+                test_results,
+                diags,
+            }) => {
+                let (normalized, _) = Self::process_junit_stacktrace(project, &test_results);
+                let grader_output = normalized.join("\n");
+                let mut messages = Vec::new();
+                messages.push(
+                    Self::build_user_message(format!(
+                        "Failed tests -\n```\n{}\n```",
+                        grader_output
+                    ))
+                    .context("Failed to build failed-tests message")?,
+                );
+                messages.push(
+                    build_context_message(project, Some(grader_output.clone()), diags)
+                        .with_context(|| {
+                            format!(
+                                "Failed to build retrieval context for failed tests in {}",
+                                file.proper_name()
+                            )
+                        })?,
+                );
+                let (tests_passed, tests_total) = Self::parse_summary_counts(&test_results);
+                Ok(TestRunOutcome {
+                    tests_passed,
+                    tests_total,
+                    messages,
+                })
+            }
+            Err(JavaFileError::Unknown(err)) => {
+                let body = format!("Unknown error -\n```\n{:#?}\n```", err);
+                let message = Self::build_user_message(body)
+                    .context("Failed to build unknown-error message")?;
+                Ok(TestRunOutcome {
+                    tests_passed: 0.0,
+                    tests_total:  0.0,
+                    messages:     vec![message],
+                })
+            }
+            Err(JavaFileError::DuringCompilation { stacktrace, diags }) => {
+                let body = format!("Compiler error -\n```\n{}\n```", stacktrace);
+                let mut messages = Vec::new();
+                messages.push(
+                    Self::build_user_message(body)
+                        .context("Failed to build compiler-error message")?,
+                );
+                messages.push(build_context_message(project, None, diags).with_context(|| {
+                    format!(
+                        "Failed to build retrieval context for compiler errors in {}",
+                        file.proper_name()
+                    )
+                })?);
+                Ok(TestRunOutcome {
+                    tests_passed: 0.0,
+                    tests_total: 0.0,
+                    messages,
+                })
+            }
+            Err(JavaFileError::AtRuntime { output, diags }) => {
+                let body = format!("Error at runtime -\n```\n{}\n```", output);
+                let mut messages = Vec::new();
+                messages.push(
+                    Self::build_user_message(body)
+                        .context("Failed to build runtime-error message")?,
+                );
+                messages.push(build_context_message(project, None, diags).with_context(|| {
+                    format!(
+                        "Failed to build retrieval context for runtime errors in {}",
+                        file.proper_name()
+                    )
+                })?);
+                Ok(TestRunOutcome {
+                    tests_passed: 0.0,
+                    tests_total: 0.0,
+                    messages,
+                })
+            }
         }
     }
 }
@@ -411,63 +534,75 @@ impl UnitTestGrader {
 
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
     pub async fn grade_unit_tests(&self) -> Result<GradeResult> {
-        let req_name = self.get_req_name();
-        let out_of = self.get_out_of();
-        let target_test = self.get_target_test();
-        let target_class = self.get_target_class();
-        let excluded_methods = self.get_excluded_methods();
-        let avoid_calls_to = self.get_avoid_calls_to();
-        let project = Project::new()?;
-
         eprintln!("Running Mutation tests -");
 
-        let target_test: Vec<String> = target_test
-            .iter()
-            .map(|f| match f.clone().into_string() {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    Err(anyhow!("target_test array has something that's not a string: {}", e))
-                }
-            })
-            .try_collect()?;
-        let target_class: Vec<String> = target_class
-            .iter()
-            .map(|f| match f.clone().into_string() {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    Err(anyhow!("target_class array has something that's not a string: {}", e))
-                }
-            })
-            .try_collect()?;
-        let excluded_methods: Vec<String> = excluded_methods
-            .iter()
-            .map(|f| match f.clone().into_string() {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    Err(anyhow!("excluded_methods array has something that's not a string: {}", e))
-                }
-            })
-            .try_collect()?;
-        let avoid_calls_to: Vec<String> = avoid_calls_to
-            .iter()
-            .map(|f| match f.clone().into_string() {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    Err(anyhow!("avoid_calls_to array has something that's not a string: {}", e))
-                }
-            })
-            .try_collect()?;
+        let req_name = self.get_req_name();
+        let out_of = self.get_out_of();
+        let inputs = self
+            .normalize_inputs()
+            .context("Failed to interpret mutation grader configuration")?;
+        let project = Project::new().context("Failed to discover project for mutation grader")?;
 
-        let class_path = classpath(project.paths())?;
+        let args = Self::build_mutation_args(&project, &inputs)
+            .context("Failed to assemble mutation testing arguments")?;
+
+        let collected = Self::run_mutation_command(&project, &args)
+            .await
+            .context("Failed to execute PIT mutation coverage report")?;
+
+        let prompts = config::java_prompts();
+
+        if collected.status.success() {
+            Self::handle_success(&project, &prompts, inputs, req_name, out_of).await
+        } else {
+            Self::handle_failure(&prompts, collected, inputs, req_name, out_of)
+        }
+    }
+
+    /// Converts a Rhai array into a `Vec<String>` with labelled conversion
+    /// errors.
+    fn array_to_strings(label: &str, values: Array) -> Result<Vec<String>> {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value.into_string().map_err(|err| {
+                    anyhow!("{label}[{index}] expected string-compatible value: {err}")
+                })
+            })
+            .collect()
+    }
+
+    /// Normalizes configured mutation grader inputs into owned collections.
+    fn normalize_inputs(&self) -> Result<MutationInputs> {
+        Ok(MutationInputs {
+            target_tests:     Self::array_to_strings("target_test", self.get_target_test())
+                .context("While decoding target tests")?,
+            target_classes:   Self::array_to_strings("target_class", self.get_target_class())
+                .context("While decoding target classes")?,
+            excluded_methods: Self::array_to_strings(
+                "excluded_methods",
+                self.get_excluded_methods(),
+            )
+            .context("While decoding excluded methods")?,
+            avoid_calls_to:   Self::array_to_strings("avoid_calls_to", self.get_avoid_calls_to())
+                .context("While decoding avoid_calls_to entries")?,
+        })
+    }
+
+    /// Builds the argument list used to invoke PIT mutation testing.
+    fn build_mutation_args(project: &Project, inputs: &MutationInputs) -> Result<Vec<OsString>> {
+        let class_path = classpath(project.paths())
+            .context("Failed to construct classpath for mutation grader")?;
         let source_dirs = [
             project.paths().source_dir().to_str().unwrap_or("."),
             project.paths().root_dir().to_str().unwrap_or("."),
         ]
         .join(",");
 
-        let args: Vec<OsString> = vec![
+        Ok(vec![
             "--class-path".into(),
-            class_path.clone().into(),
+            class_path.into(),
             "org.pitest.mutationtest.commandline.MutationCoverageReport".into(),
             "--reportDir".into(),
             "test_reports".into(),
@@ -476,9 +611,9 @@ impl UnitTestGrader {
             "--threads".into(),
             "6".into(),
             "--targetClasses".into(),
-            target_class.join(",").into(),
+            inputs.target_classes.join(",").into(),
             "--targetTests".into(),
-            target_test.join(",").into(),
+            inputs.target_tests.join(",").into(),
             "--sourceDirs".into(),
             source_dirs.into(),
             "--timestampedReports".into(),
@@ -488,148 +623,192 @@ impl UnitTestGrader {
             "--mutators".into(),
             "STRONGER".into(),
             "--excludedMethods".into(),
-            excluded_methods.join(",").into(),
+            inputs.excluded_methods.join(",").into(),
             "--avoidCallsTo".into(),
-            avoid_calls_to.join(",").into(),
-        ];
+            inputs.avoid_calls_to.join(",").into(),
+        ])
+    }
 
-        let java = java_path()?;
-        let collected = process::run_collect(
+    /// Executes PIT mutation testing and returns the collected process output.
+    async fn run_mutation_command(
+        project: &Project,
+        args: &[OsString],
+    ) -> Result<process::Collected> {
+        let java = java_path().context("Failed to locate java runtime for mutation grader")?;
+        process::run_collect(
             java.as_os_str(),
-            &args,
+            args,
             StdinSource::Null,
             Some(project.paths().root_dir()),
             &[],
             Some(config::java_timeout()),
         )
-        .await?;
+        .await
+        .with_context(|| "Failed to spawn or monitor mutation coverage process")
+    }
 
-        let process::Collected {
-            status,
-            stdout,
-            stderr,
-        } = collected;
-        let prompts = config::java_prompts();
+    /// Processes a successful PIT run by parsing reports and assembling
+    /// prompts.
+    async fn handle_success(
+        project: &Project,
+        prompts: &crate::java::JavaPrompts,
+        inputs: MutationInputs,
+        req_name: String,
+        out_of: f64,
+    ) -> Result<GradeResult> {
+        let surviving = Self::load_surviving_mutations(project)
+            .await
+            .context("While loading mutation report")?;
+        let penalty = surviving.len() as u32 * 4;
 
-        if status.success() {
-            let reports_dir = project.paths().root_dir().join("test_reports");
-            async_fs::create_dir_all(&reports_dir).await?;
-            let csv_path = reports_dir.join("mutations.csv");
-            let csv_bytes = async_fs::read(&csv_path)
-                .await
-                .context("Could not read ./test_reports/mutations.csv file")?;
-            let csv_contents =
-                String::from_utf8(csv_bytes).context("Failed to decode mutations.csv as utf8")?;
-            let mut diags = vec![];
+        eprintln!("Ran mutation tests for {} -", inputs.target_tests.join(", "));
+        eprintln!("Problematic mutation test failures printed above.");
 
-            for line in csv_contents.lines() {
-                let parse_result = parser::mutation_report_row(line)
-                    .context("While parsing test_reports/mutations.csv")?;
+        let prompt = Self::build_mutation_success_prompt(project, prompts, &inputs, &surviving)
+            .context("Failed to build mutation failure prompt")?;
 
-                if parse_result.result() == "SURVIVED" {
-                    diags.push(parse_result);
-                }
-            }
-            let penalty = diags.len() as u32 * 4;
-            eprintln!("Ran mutation tests for {} -", target_test.join(", "));
-            let num_diags = diags.len();
-            eprintln!("Problematic mutation test failures printed above.");
+        let grade_value = (out_of as u32).saturating_sub(penalty).into();
 
-            let prompt = if num_diags > 0 {
-                let context = build_context_message(&project, None, diags.clone())?;
+        Ok(GradeResult {
+            requirement: req_name,
+            grade: Grade::new(grade_value, out_of),
+            reason: format!("-{penalty} Penalty due to surviving mutations"),
+            prompt,
+        })
+    }
 
-                let mut feedback = ExtendedTable::new(diags).to_string();
-                eprintln!("{feedback}");
+    /// Processes a failed PIT run by capturing stderr/stdout into prompts.
+    fn handle_failure(
+        prompts: &crate::java::JavaPrompts,
+        collected: process::Collected,
+        inputs: MutationInputs,
+        req_name: String,
+        out_of: f64,
+    ) -> Result<GradeResult> {
+        let process::Collected { stdout, stderr, .. } = collected;
 
-                if feedback.len() > config::PROMPT_TRUNCATE {
-                    feedback.truncate(config::PROMPT_TRUNCATE);
-                    feedback.push_str("...[TRUNCATED]");
-                }
+        let mut output = [
+            String::from_utf8(stderr).context("Failed to decode mutation stderr as utf8")?,
+            String::from_utf8(stdout).context("Failed to decode mutation stdout as utf8")?,
+        ]
+        .concat();
 
-                Some(vec![
-                    ChatCompletionRequestSystemMessageArgs::default()
-                        .content(prompts.system_message().to_string())
-                        .name("Instructor".to_string())
-                        .build()
-                        .context("Failed to build system message")?
-                        .into(),
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(feedback)
-                        .name("Student".to_string())
-                        .build()
-                        .context("Failed to build user message")?
-                        .into(),
-                    context,
-                    ChatCompletionRequestSystemMessageArgs::default()
-                        .content(format!(
-                            include_str!("../prompts/mutation_testing.md"),
-                            test = target_test.join(", "),
-                            class = target_class.join(", ")
-                        ))
-                        .name("Instructor".to_string())
-                        .build()
-                        .context("Failed to build system message")?
-                        .into(),
-                ])
-            } else {
-                None
-            };
-
-            Ok(GradeResult {
-                requirement: req_name,
-                grade: Grade::new((out_of as u32).saturating_sub(penalty).into(), out_of),
-                reason: format!("-{penalty} Penalty due to surviving mutations"),
-                prompt,
-            })
-        } else {
-            let mut output = [
-                String::from_utf8(stderr).context("Failed to parse stderr as utf8")?,
-                String::from_utf8(stdout).context("Failed to parse stdout as utf8")?,
-            ]
-            .concat();
-            eprintln!("{output}");
-            if output.len() > config::PROMPT_TRUNCATE {
-                output.truncate(config::PROMPT_TRUNCATE);
-                output.push_str("...[TRUNCATED]");
-            }
-
-            let prompt = if !output.is_empty() {
-                Some(vec![
-                    ChatCompletionRequestSystemMessageArgs::default()
-                        .content(prompts.system_message().to_string())
-                        .name("Instructor".to_string())
-                        .build()
-                        .context("Failed to build system message")?
-                        .into(),
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(output)
-                        .name("Student".to_string())
-                        .build()
-                        .context("Failed to build user message")?
-                        .into(),
-                    ChatCompletionRequestSystemMessageArgs::default()
-                        .content(format!(
-                            include_str!("../prompts/mutation_testing_2.md"),
-                            test = target_test.join(", "),
-                            class = target_class.join(", ")
-                        ))
-                        .name("Instructor".to_string())
-                        .build()
-                        .context("Failed to build system message")?
-                        .into(),
-                ])
-            } else {
-                None
-            };
-            Ok(GradeResult {
-                requirement: req_name,
-                grade: Grade::new(0.0, out_of),
-                reason: String::from(
-                    "Something went wrong while running mutation tests, skipping.",
-                ),
-                prompt,
-            })
+        eprintln!("{output}");
+        if output.len() > config::PROMPT_TRUNCATE {
+            output.truncate(config::PROMPT_TRUNCATE);
+            output.push_str("...[TRUNCATED]");
         }
+
+        let prompt = Self::build_mutation_failure_prompt(prompts, &inputs, output)
+            .context("Failed to build mutation failure prompt")?;
+
+        Ok(GradeResult {
+            requirement: req_name,
+            grade: Grade::new(0.0, out_of),
+            reason: String::from("Something went wrong while running mutation tests, skipping."),
+            prompt,
+        })
+    }
+
+    /// Loads the mutation CSV report and extracts surviving mutations.
+    async fn load_surviving_mutations(project: &Project) -> Result<Vec<MutationDiagnostic>> {
+        let reports_dir = project.paths().root_dir().join("test_reports");
+        async_fs::create_dir_all(&reports_dir)
+            .await
+            .with_context(|| {
+                format!("Failed to create reports directory {}", reports_dir.display())
+            })?;
+        let csv_path = reports_dir.join("mutations.csv");
+        let csv_bytes = async_fs::read(&csv_path)
+            .await
+            .with_context(|| format!("Could not read {}", csv_path.display()))?;
+        let csv_contents =
+            String::from_utf8(csv_bytes).context("Failed to decode mutations.csv as utf8")?;
+        let mut surviving = Vec::new();
+        for (index, line) in csv_contents.lines().enumerate() {
+            let diag = parser::mutation_report_row(line).with_context(|| {
+                format!("While parsing test_reports/mutations.csv (line {})", index + 1)
+            })?;
+            if diag.result() == "SURVIVED" {
+                surviving.push(diag);
+            }
+        }
+        Ok(surviving)
+    }
+
+    /// Builds prompt messages describing surviving mutations, if any.
+    fn build_mutation_success_prompt(
+        project: &Project,
+        prompts: &crate::java::JavaPrompts,
+        inputs: &MutationInputs,
+        surviving: &[MutationDiagnostic],
+    ) -> Result<Option<Vec<ChatCompletionRequestMessage>>> {
+        if surviving.is_empty() {
+            return Ok(None);
+        }
+
+        let context = build_context_message(project, None, surviving.to_vec())
+            .context("Failed to build retrieval context for surviving mutations")?;
+
+        let mut feedback = ExtendedTable::new(surviving.to_vec()).to_string();
+        eprintln!("{feedback}");
+
+        if feedback.len() > config::PROMPT_TRUNCATE {
+            feedback.truncate(config::PROMPT_TRUNCATE);
+            feedback.push_str("...[TRUNCATED]");
+        }
+
+        let mut messages = Vec::new();
+        messages.push(
+            ByUnitTestGrader::build_system_message(prompts.system_message().to_string())
+                .context("Failed to build system prompt for mutation failures")?,
+        );
+        messages.push(
+            ByUnitTestGrader::build_user_message(feedback)
+                .context("Failed to build mutation feedback message")?,
+        );
+        messages.push(context);
+        messages.push(
+            ByUnitTestGrader::build_system_message(format!(
+                include_str!("../prompts/mutation_testing.md"),
+                test = inputs.target_tests.join(", "),
+                class = inputs.target_classes.join(", ")
+            ))
+            .context("Failed to build mutation follow-up prompt")?,
+        );
+
+        Ok(Some(messages))
+    }
+
+    /// Builds prompt messages when the mutation command itself fails.
+    fn build_mutation_failure_prompt(
+        prompts: &crate::java::JavaPrompts,
+        inputs: &MutationInputs,
+        output: String,
+    ) -> Result<Option<Vec<ChatCompletionRequestMessage>>> {
+        if output.is_empty() {
+            return Ok(None);
+        }
+
+        let mut messages = Vec::new();
+        messages.push(
+            ByUnitTestGrader::build_system_message(prompts.system_message().to_string())
+                .context("Failed to build system prompt for mutation failure")?,
+        );
+        messages.push(
+            ByUnitTestGrader::build_user_message(output)
+                .context("Failed to build mutation stderr/stdout message")?,
+        );
+        messages.push(
+            ByUnitTestGrader::build_system_message(format!(
+                include_str!("../prompts/mutation_testing_2.md"),
+                test = inputs.target_tests.join(", "),
+                class = inputs.target_classes.join(", ")
+            ))
+            .context("Failed to build mutation recovery prompt")?,
+        );
+
+        Ok(Some(messages))
     }
 }
 
