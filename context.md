@@ -278,7 +278,7 @@ Queue — Next File Passes (rolling 3–5)
 
 Follow‑Ups (per-pass discoveries)
 
-- [ ] `src/java/file.rs` — minor ergonomics: clarify `name` vs `file_name` doc; consider small helpers for fence-building; avoid allocating when entries are empty.
+- [x] `src/java/file.rs` — decomposed `File::new` into helpers (`parse_source`, `detect_file_identity`, `collect_test_methods`, interface/class section builders) and clarified docs; push_block already skips empty collections so no extra allocation cleanup needed.
 - [ ] `src/java/project.rs` — honor path overrides (CLI/env), remove discovery panics, tighten runtime spawning/cache logic.
 - [x] `src/java/grade/diff.rs` — Console diffs now use `owo-colors` while prompts stay ANSI-free; further regression coverage deferred.
 - [ ] `src/java/grade/docs.rs` — finish guard rails for missing filenames in javac output; ensure prompt truncation/tables remain consistent.
@@ -444,4 +444,8 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 ## Doc Change Log
 
+- 2025-10-15: Documented the `src/java/file.rs` refactor—`File::new` now delegates to
+  helper functions (`parse_source`, `detect_file_identity`, `collect_test_methods`,
+  `build_description`, plus interface/class section helpers) to keep construction,
+  retrieval summaries, and testing-focused logic separate.
 - 2025-09-28: Added onboarding quickstart, CLI contract, env/glossary tables, clarified config/AtomicBool behavior, tightened scripting decision record + appendix, and documented maintenance commands.

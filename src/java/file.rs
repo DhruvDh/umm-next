@@ -1,7 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     hash::{Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -74,6 +74,219 @@ fn push_declaration(lines: &mut Vec<String>, decl: &str) {
     lines.push(format!("  {}", trimmed));
     lines.push(String::from("  ```"));
     lines.push(String::from("  </declaration>"));
+}
+
+/// Normalizes stacktrace lines by unescaping common escape sequences.
+fn normalize_stacktrace_line(line: &str) -> String {
+    line.replace("\\\\", "\\").replace("\\\"", "\"")
+}
+
+/// Decodes combined stdout/stderr output into a UTF-8 string and removes escape
+/// sequences.
+fn decode_output(
+    stderr: Vec<u8>,
+    stdout: Vec<u8>,
+    contexts: (&'static str, &'static str, &'static str),
+) -> Result<String> {
+    let (stderr_ctx, stdout_ctx, unescape_ctx) = contexts;
+    let mut decoded = String::from_utf8(stderr).context(stderr_ctx)?;
+    let stdout = String::from_utf8(stdout).context(stdout_ctx)?;
+    decoded.push_str(&stdout);
+    unescape(&decoded).context(unescape_ctx)
+}
+
+/// Loads source code from `path` and constructs a Java parser.
+fn parse_source(path: &Path) -> Result<Parser> {
+    let source_code = std::fs::read_to_string(path)
+        .with_context(|| format!("Could not read file: {:?}", path))?;
+    Parser::new(source_code)
+}
+
+/// Determines the initial file type and simple name based on parsed
+/// declarations.
+fn detect_file_identity(
+    parser: &Parser,
+    path: &Path,
+    has_main: bool,
+) -> Result<(FileType, String)> {
+    let interface = parser.query(INTERFACENAME_QUERY)?;
+    if let Some(first) = interface.first() {
+        let name = first
+            .get("name")
+            .ok_or_else(|| {
+                anyhow!(
+                    "Could not find a valid interface declaration for {} (hashmap has no name key)",
+                    path.display()
+                )
+            })?
+            .to_string();
+        return Ok((FileType::Interface, name));
+    }
+
+    let classes = parser.query(CLASSNAME_QUERY)?;
+    if let Some(first) = classes.first() {
+        let name = first
+            .get("name")
+            .ok_or_else(|| {
+                anyhow!(
+                    "Could not find a valid class declaration for {} (hashmap has no name key)",
+                    path.display()
+                )
+            })?
+            .to_string();
+        let kind = if has_main {
+            FileType::ClassWithMain
+        } else {
+            FileType::Class
+        };
+        return Ok((kind, name));
+    }
+
+    Ok((FileType::Class, String::new()))
+}
+
+/// Collects fully qualified test method names discovered via `@Test`
+/// annotations.
+fn collect_test_methods(parser: &Parser, proper_name: &str) -> Result<Vec<String>> {
+    let mut tests = Vec::new();
+    for entry in parser.query(TEST_ANNOTATION_QUERY)? {
+        if let Some(method) = entry.get("name") {
+            tests.push(format!("{}#{}", proper_name, method));
+        }
+    }
+    Ok(tests)
+}
+
+/// Returns the XML type attribute corresponding to the file classification.
+fn file_type_attr(kind: &FileType) -> &'static str {
+    match kind {
+        FileType::Interface => "interface",
+        FileType::Class => "class",
+        FileType::ClassWithMain => "class_with_main",
+        FileType::Test => "test",
+    }
+}
+
+/// Renders declaration and summary sections for interface files.
+fn interface_sections(parser: &Parser, proper_name: &str) -> Vec<String> {
+    let empty_dict = Dict::new();
+    let empty = String::new();
+    let mut lines = Vec::new();
+
+    let declaration_data = parser
+        .query(INTERFACE_DECLARATION_QUERY)
+        .unwrap_or_default();
+    let declaration = declaration_data.first().unwrap_or(&empty_dict);
+
+    let parameters = declaration.get("parameters").unwrap_or(&empty).trim();
+    let extends = declaration.get("extends").unwrap_or(&empty).trim();
+    let mut decl = format!("interface {proper_name}");
+    if !parameters.is_empty() {
+        decl.push(' ');
+        decl.push_str(parameters);
+    }
+    if !extends.is_empty() {
+        decl.push(' ');
+        decl.push_str(extends);
+    }
+    push_declaration(&mut lines, decl.trim());
+
+    let constants = parser
+        .query(INTERFACE_CONSTANTS_QUERY)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| c.get("constant"))
+        .filter_map(|s| normalize_entry(s))
+        .collect::<Vec<_>>();
+
+    let methods = parser
+        .query(INTERFACE_METHODS_QUERY)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|m| m.get("signature"))
+        .filter_map(|s| normalize_entry(s))
+        .collect::<Vec<_>>();
+
+    push_block(&mut lines, "constants", &constants);
+    push_block(&mut lines, "methods", &methods);
+    lines
+}
+
+/// Renders declaration and summary sections for class-like files.
+fn class_sections(parser: &Parser, proper_name: &str) -> Vec<String> {
+    let empty_dict = Dict::new();
+    let empty = String::new();
+    let mut lines = Vec::new();
+
+    let declaration_data = parser.query(CLASS_DECLARATION_QUERY).unwrap_or_default();
+    let declaration = declaration_data.first().unwrap_or(&empty_dict);
+
+    let parameters = declaration.get("typeParameters").unwrap_or(&empty).trim();
+    let implements = declaration.get("interfaces").unwrap_or(&empty).trim();
+
+    let mut decl = format!("class {proper_name}");
+    if !parameters.is_empty() {
+        decl.push(' ');
+        decl.push_str(parameters);
+    }
+    if !implements.is_empty() {
+        decl.push(' ');
+        decl.push_str(implements);
+    }
+    push_declaration(&mut lines, decl.trim());
+
+    let fields = parser
+        .query(CLASS_FIELDS_QUERY)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|f| f.get("field"))
+        .filter_map(|s| normalize_entry(s))
+        .collect::<Vec<_>>();
+
+    let constructor_data = parser.query(CLASS_CONSTRUCTOR_QUERY).unwrap_or_default();
+    let constructors = constructor_data
+        .iter()
+        .map(constructor_signature)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+
+    let method_data = parser.query(CLASS_METHOD_QUERY).unwrap_or_default();
+    let methods = method_data
+        .iter()
+        .map(method_signature)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+
+    push_block(&mut lines, "fields", &fields);
+    push_block(&mut lines, "constructors", &constructors);
+    push_block(&mut lines, "methods", &methods);
+    lines
+}
+
+/// Builds the XML-like description block used for retrieval context.
+fn build_description(
+    parser: &Parser,
+    proper_name: &str,
+    kind: FileType,
+    test_methods: &[String],
+    file_path: &str,
+) -> String {
+    let mut lines = vec![format!(
+        "<file name=\"{proper_name}\" path=\"{file_path}\" type=\"{}\">",
+        file_type_attr(&kind)
+    )];
+
+    match kind {
+        FileType::Interface => lines.extend(interface_sections(parser, proper_name)),
+        _ => lines.extend(class_sections(parser, proper_name)),
+    }
+
+    if !test_methods.is_empty() {
+        push_block(&mut lines, "tests", test_methods);
+    }
+
+    lines.push(String::from("</file>"));
+    lines.join("\n")
 }
 
 /// Builds a readable method signature from tree-sitter captures.
@@ -316,15 +529,61 @@ impl File {
             .map_err(JavaFileError::Unknown)
     }
 
+    /// Shared helper to compile and run a main class with the provided stdin
+    /// configuration.
+    async fn exec_main(
+        &self,
+        stdin_mode: StdinSource,
+        unescape_context: &'static str,
+    ) -> Result<String, JavaFileError> {
+        if self.kind != FileType::ClassWithMain {
+            return Err(JavaFileError::DuringCompilation {
+                stacktrace: "The file you wish to run does not have a main method.".into(),
+                diags:      vec![],
+            });
+        }
+
+        self.check().await?;
+
+        let java = java_path().map_err(JavaFileError::Unknown)?;
+        let args = self.java_run_args().map_err(JavaFileError::Unknown)?;
+
+        let process::Collected {
+            status,
+            stdout,
+            stderr,
+        } = Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
+            .await?;
+
+        let output = decode_output(
+            stderr,
+            stdout,
+            (
+                "Error when parsing stderr as utf8",
+                "Error when parsing stdout as utf8",
+                unescape_context,
+            ),
+        )?;
+
+        if status.success() {
+            Ok(output)
+        } else {
+            let mut diags = Vec::new();
+            for line in output.lines() {
+                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
+                    diags.push(diag);
+                }
+            }
+
+            Err(JavaFileError::AtRuntime { output, diags })
+        }
+    }
+
     /// Creates a new `File` from `path`
     ///
     /// * `path`: the path to read and try to create a File instance for.
     pub(super) fn new(path: PathBuf, paths: ProjectPaths) -> Result<Self> {
-        let parser = {
-            let source_code = std::fs::read_to_string(&path)
-                .with_context(|| format!("Could not read file: {:?}", &path))?;
-            Parser::new(source_code)?
-        };
+        let parser = parse_source(path.as_path())?;
 
         let imports = {
             let imports = parser.query(IMPORT_QUERY)?;
@@ -346,44 +605,7 @@ impl File {
         };
 
         let has_main = !parser.query(MAIN_METHOD_QUERY)?.is_empty();
-        let (kind, name) = {
-            let interface = parser.query(INTERFACENAME_QUERY)?;
-            if let Some(first) = interface.first() {
-                let name = first
-                    .get("name")
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Could not find a valid interface declaration for {} (hashmap has no \
-                             name key)",
-                            path.display()
-                        )
-                    })?
-                    .to_string();
-                (FileType::Interface, name)
-            } else {
-                let classes = parser.query(CLASSNAME_QUERY)?;
-                if let Some(first) = classes.first() {
-                    let name = first
-                        .get("name")
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "Could not find a valid class declaration for {} (hashmap has no \
-                                 name key)",
-                                path.display()
-                            )
-                        })?
-                        .to_string();
-                    let kind = if has_main {
-                        FileType::ClassWithMain
-                    } else {
-                        FileType::Class
-                    };
-                    (kind, name)
-                } else {
-                    (FileType::Class, String::new())
-                }
-            }
-        };
+        let (kind, name) = detect_file_identity(&parser, path.as_path(), has_main)?;
 
         let proper_name = if let Some(pkg) = package_name.as_ref() {
             format!("{pkg}.{name}")
@@ -391,18 +613,7 @@ impl File {
             name.clone()
         };
 
-        let test_methods = {
-            let test_methods = parser.query(TEST_ANNOTATION_QUERY)?;
-            let mut tests = vec![];
-            for t in test_methods {
-                if let Some(t) = t.get("name") {
-                    tests.push(format!("{}#{}", &proper_name, t));
-                }
-            }
-
-            tests
-        };
-
+        let test_methods = collect_test_methods(&parser, &proper_name)?;
         let kind = if !test_methods.is_empty() {
             FileType::Test
         } else {
@@ -410,111 +621,8 @@ impl File {
         };
 
         let file_path = path.display().to_string();
-        let type_attr = match kind {
-            FileType::Interface => "interface",
-            FileType::Class => "class",
-            FileType::ClassWithMain => "class_with_main",
-            FileType::Test => "test",
-        };
-
-        let empty_dict = Dict::new();
-        let empty = String::new();
-
-        let mut lines = vec![format!(
-            "<file name=\"{proper_name}\" path=\"{file_path}\" type=\"{type_attr}\">"
-        )];
-
-        match kind {
-            FileType::Interface => {
-                let declaration_data = parser
-                    .query(INTERFACE_DECLARATION_QUERY)
-                    .unwrap_or_default();
-                let declaration = declaration_data.first().unwrap_or(&empty_dict);
-
-                let parameters = declaration.get("parameters").unwrap_or(&empty).trim();
-                let extends = declaration.get("extends").unwrap_or(&empty).trim();
-                let mut decl = format!("interface {proper_name}");
-                if !parameters.is_empty() {
-                    decl.push(' ');
-                    decl.push_str(parameters);
-                }
-                if !extends.is_empty() {
-                    decl.push(' ');
-                    decl.push_str(extends);
-                }
-                push_declaration(&mut lines, decl.trim());
-
-                let constants = parser
-                    .query(INTERFACE_CONSTANTS_QUERY)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|c| c.get("constant"))
-                    .filter_map(|s| normalize_entry(s))
-                    .collect::<Vec<_>>();
-
-                let methods = parser
-                    .query(INTERFACE_METHODS_QUERY)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|m| m.get("signature"))
-                    .filter_map(|s| normalize_entry(s))
-                    .collect::<Vec<_>>();
-
-                push_block(&mut lines, "constants", &constants);
-                push_block(&mut lines, "methods", &methods);
-            }
-            _ => {
-                let declaration_data = parser.query(CLASS_DECLARATION_QUERY).unwrap_or_default();
-                let declaration = declaration_data.first().unwrap_or(&empty_dict);
-
-                let parameters = declaration.get("typeParameters").unwrap_or(&empty).trim();
-                let implements = declaration.get("interfaces").unwrap_or(&empty).trim();
-
-                let mut decl = format!("class {proper_name}");
-                if !parameters.is_empty() {
-                    decl.push(' ');
-                    decl.push_str(parameters);
-                }
-                if !implements.is_empty() {
-                    decl.push(' ');
-                    decl.push_str(implements);
-                }
-                push_declaration(&mut lines, decl.trim());
-
-                let fields = parser
-                    .query(CLASS_FIELDS_QUERY)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|f| f.get("field"))
-                    .filter_map(|s| normalize_entry(s))
-                    .collect::<Vec<_>>();
-
-                let constructor_data = parser.query(CLASS_CONSTRUCTOR_QUERY).unwrap_or_default();
-                let constructors = constructor_data
-                    .iter()
-                    .map(constructor_signature)
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>();
-
-                let method_data = parser.query(CLASS_METHOD_QUERY).unwrap_or_default();
-                let methods = method_data
-                    .iter()
-                    .map(method_signature)
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>();
-
-                push_block(&mut lines, "fields", &fields);
-                push_block(&mut lines, "constructors", &constructors);
-                push_block(&mut lines, "methods", &methods);
-            }
-        }
-
-        if !test_methods.is_empty() {
-            push_block(&mut lines, "tests", &test_methods);
-        }
-
-        lines.push(String::from("</file>"));
-        let description = lines.join("\n");
+        let description =
+            build_description(&parser, &proper_name, kind.clone(), &test_methods, &file_path);
 
         Ok(Self {
             path: path.to_owned(),
@@ -548,14 +656,15 @@ impl File {
         .await?;
 
         let process::Collected { stdout, stderr, .. } = collected;
-        let output = unescape(
-            &[
-                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
-                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
-            ]
-            .concat(),
-        )
-        .context("Error when un-escaping javac output.")?;
+        let output = decode_output(
+            stderr,
+            stdout,
+            (
+                "Error when parsing stderr as utf8",
+                "Error when parsing stdout as utf8",
+                "Error when un-escaping javac output.",
+            ),
+        )?;
 
         Ok(output)
     }
@@ -580,14 +689,15 @@ impl File {
             stdout,
             stderr,
         } = collected;
-        let output = unescape(
-            &[
-                String::from_utf8(stderr).context("Error parsing stderr as utf8")?,
-                String::from_utf8(stdout).context("Error parsing stdout as utf8")?,
-            ]
-            .concat(),
-        )
-        .context("Error when un-escaping javac output.")?;
+        let output = decode_output(
+            stderr,
+            stdout,
+            (
+                "Error parsing stderr as utf8",
+                "Error parsing stdout as utf8",
+                "Error when un-escaping javac output.",
+            ),
+        )?;
 
         if status.success() {
             Ok(output)
@@ -608,18 +718,6 @@ impl File {
 
     /// Utility method to run a java file that has a main method.
     pub async fn run(&self, input: Option<String>) -> Result<String, JavaFileError> {
-        if self.kind != FileType::ClassWithMain {
-            return Err(JavaFileError::DuringCompilation {
-                stacktrace: "The file you wish to run does not have a main method.".into(),
-                diags:      vec![],
-            });
-        }
-
-        self.check().await?;
-
-        let java = java_path().map_err(JavaFileError::Unknown)?;
-        let args = self.java_run_args().map_err(JavaFileError::Unknown)?;
-
         let stdin_mode = match input {
             Some(mut value) => {
                 value.push_str("\r\n");
@@ -628,53 +726,13 @@ impl File {
             None => StdinSource::Inherit,
         };
 
-        let collected =
-            Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
-                .await?;
-
-        let process::Collected {
-            status,
-            stdout,
-            stderr,
-        } = collected;
-        let output = unescape(
-            &[
-                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
-                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
-            ]
-            .concat(),
-        )
-        .context("Error when escaping java output.")?;
-
-        if status.success() {
-            Ok(output)
-        } else {
-            let mut diags = Vec::new();
-            for line in output.lines() {
-                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                    diags.push(diag);
-                }
-            }
-
-            Err(JavaFileError::AtRuntime { output, diags })
-        }
+        self.exec_main(stdin_mode, "Error when escaping java output.")
+            .await
     }
 
     /// Runs the java file while piping stdin even when no explicit input is
     /// supplied.
     pub async fn run_with_input(&self, input: Option<String>) -> Result<String, JavaFileError> {
-        if self.kind != FileType::ClassWithMain {
-            return Err(JavaFileError::DuringCompilation {
-                stacktrace: "The file you wish to run does not have a main method.".into(),
-                diags:      vec![],
-            });
-        }
-
-        self.check().await?;
-
-        let java = java_path().map_err(JavaFileError::Unknown)?;
-        let args = self.java_run_args().map_err(JavaFileError::Unknown)?;
-
         let stdin_mode = match input {
             Some(mut value) => {
                 value.push_str("\r\n");
@@ -683,36 +741,8 @@ impl File {
             None => StdinSource::Bytes(Vec::new()),
         };
 
-        let collected =
-            Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
-                .await?;
-
-        let process::Collected {
-            status,
-            stdout,
-            stderr,
-        } = collected;
-        let output = unescape(
-            &[
-                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
-                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
-            ]
-            .concat(),
-        )
-        .context("Error when un-escaping javac output.")?;
-
-        if status.success() {
-            Ok(output)
-        } else {
-            let mut diags = Vec::new();
-            for line in output.lines() {
-                if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                    diags.push(diag);
-                }
-            }
-
-            Err(JavaFileError::AtRuntime { output, diags })
-        }
+        self.exec_main(stdin_mode, "Error when un-escaping javac output.")
+            .await
     }
 
     /// A utility method that takes a list of strings (or types that implement
@@ -768,14 +798,15 @@ impl File {
             stdout,
             stderr,
         } = collected;
-        let output = unescape(
-            &[
-                String::from_utf8(stderr).context("Error when parsing stderr as utf8")?,
-                String::from_utf8(stdout).context("Error when parsing stdout as utf8")?,
-            ]
-            .concat(),
-        )
-        .context("Error when un-escaping JUnit output.")?;
+        let output = decode_output(
+            stderr,
+            stdout,
+            (
+                "Error when parsing stderr as utf8",
+                "Error when parsing stdout as utf8",
+                "Error when un-escaping JUnit output.",
+            ),
+        )?;
 
         if status.success() {
             Ok(output)
@@ -792,20 +823,18 @@ impl File {
                     if let Some(proj) = project
                         && proj.identify(diag.file_name()).is_ok()
                     {
-                        new_output
-                            .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
+                        new_output.push(normalize_stacktrace_line(line));
                     }
                     diags.push(diag);
                 } else if let Ok(diag) = parser::parse_diag(line) {
                     if let Some(proj) = project
                         && proj.identify(diag.file_name()).is_ok()
                     {
-                        new_output
-                            .push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
+                        new_output.push(normalize_stacktrace_line(line));
                     }
                     diags.push(diag.into());
                 } else {
-                    new_output.push(line.replace("\\\\", "\\").replace("\\\"", "\"").to_string());
+                    new_output.push(normalize_stacktrace_line(line));
                 }
             }
 
