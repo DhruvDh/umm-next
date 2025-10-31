@@ -27,6 +27,8 @@ impl ProjectPaths {
         let test_dir = root_dir.join("test");
         let lib_dir = root_dir.join("lib");
         let umm_dir = root_dir.join(".umm");
+        // TODO: When Project introduces a typed builder, surface hooks to override
+        // these defaults.
 
         Self {
             root_dir,

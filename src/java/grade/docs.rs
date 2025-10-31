@@ -12,8 +12,7 @@ use tabled::{
 use super::results::{Grade, GradeResult};
 use crate::{
     config,
-    java::{JavaFileError, Project},
-    parsers::parser,
+    java::{JavaFileError, Project, parsers::parser},
     retrieval::build_context_message,
 };
 #[derive(Clone)]
@@ -229,7 +228,7 @@ impl DocsGrader {
                     .into(),
                 context,
                 ChatCompletionRequestSystemMessageArgs::default()
-                    .content(include_str!("../../prompts/javadoc.md").to_string())
+                    .content(include_str!("../prompts/javadoc.md").to_string())
                     .name("Instructor".to_string())
                     .build()?
                     .into(),

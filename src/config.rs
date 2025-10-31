@@ -56,14 +56,14 @@ pub const PROMPT_TRUNCATE: usize = 60_000;
 impl Prompts {
     /// Load prompt templates from disk.
     fn load() -> Self {
-        let system_message_intro = include_str!("prompts/system_message_intro.md").to_string();
-        let system_message_outro = include_str!("prompts/system_message_outro.md").to_string();
+        let system_message_intro = include_str!("java/prompts/system_message_intro.md").to_string();
+        let system_message_outro = include_str!("java/prompts/system_message_outro.md").to_string();
         let system_message = format!("{}\n{}", system_message_intro, system_message_outro);
 
         let retrieval_message_intro =
-            include_str!("prompts/retrieval_system_message_intro.md").into();
+            include_str!("java/prompts/retrieval_system_message_intro.md").into();
         let retrieval_message_outro =
-            include_str!("prompts/retrieval_system_message_outro.md").into();
+            include_str!("java/prompts/retrieval_system_message_outro.md").into();
 
         Self {
             system_message_intro,
@@ -72,40 +72,40 @@ impl Prompts {
             retrieval_message_intro,
             retrieval_message_outro,
             algorithmic_solutions_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/algorithmic_solutions_quant.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/algorithmic_solutions_quant.md"),
             ),
             code_readability_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/code_readability_written_com.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/code_readability_written_com.md"),
             ),
             comments_written_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/comments_written_com.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/comments_written_com.md"),
             ),
             error_handling_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/error_handling_verification.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/error_handling_verification.md"),
             ),
             logic_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/logic_programming.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/logic_programming.md"),
             ),
             naming_conventions_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/naming_written_com.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/naming_written_com.md"),
             ),
             object_oriented_programming_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/oop_programming.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/oop_programming.md"),
             ),
             syntax_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/syntax_programming.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/syntax_programming.md"),
             ),
             testing_slo: format!(
-                include_str!("prompts/slos/system_message_intro.md"),
-                SLO_DESCRIPTION = include_str!("prompts/slos/testing_verification.md"),
+                include_str!("java/prompts/slos/system_message_intro.md"),
+                SLO_DESCRIPTION = include_str!("java/prompts/slos/testing_verification.md"),
             ),
         }
     }

@@ -12,8 +12,7 @@ use tokio::fs as async_fs;
 use super::results::{Grade, GradeResult};
 use crate::{
     config,
-    java::{JavaFileError, Project, ProjectPaths},
-    parsers::parser,
+    java::{JavaFileError, Project, ProjectPaths, parsers::parser},
     process::{self, StdinSource},
     retrieval::build_context_message,
     util::{classpath, java_path},
@@ -560,7 +559,7 @@ impl UnitTestGrader {
                     context,
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content(format!(
-                            include_str!("../../prompts/mutation_testing.md"),
+                            include_str!("../prompts/mutation_testing.md"),
                             test = target_test.join(", "),
                             class = target_class.join(", ")
                         ))
@@ -607,7 +606,7 @@ impl UnitTestGrader {
                         .into(),
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content(format!(
-                            include_str!("../../prompts/mutation_testing_2.md"),
+                            include_str!("../prompts/mutation_testing_2.md"),
                             test = target_test.join(", "),
                             class = target_class.join(", ")
                         ))

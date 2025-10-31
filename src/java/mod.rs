@@ -7,6 +7,8 @@ pub mod file;
 pub mod grade;
 /// Tree-sitter parser wrapper.
 pub mod parser;
+/// Parsers for javac, JUnit, and mutation-testing outputs.
+pub mod parsers;
 /// Project path configuration helpers.
 pub mod paths;
 /// Java project discovery and operations.

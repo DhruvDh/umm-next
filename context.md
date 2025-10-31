@@ -444,6 +444,10 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 ## Doc Change Log
 
+- 2025-10-16: Relocated Java-only prompt/query assets and the PEG parser helpers
+  into `src/java/` (to prep for multi-language separation) and left TODO
+  breadcrumbs on `ProjectPaths` / `Project` to surface configurable workspace
+  layouts when a typed builder lands.
 - 2025-10-15: Documented the `src/java/file.rs` refactor—`File::new` now delegates to
   helper functions (`parse_source`, `detect_file_identity`, `collect_test_methods`,
   `build_description`, plus interface/class section helpers) to keep construction,

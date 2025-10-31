@@ -26,10 +26,10 @@ use umm::{clean, grade, java::Project};
 fn update() -> Result<()> {
     self_update::backends::github::Update::configure()
         .repo_owner("dhruvdh")
-        .repo_name("umm")
+        .repo_name("umm-next")
         .bin_name("umm")
         .no_confirm(true)
-        .target_version_tag("spring_24")
+        .target_version_tag("spring_26")
         .show_download_progress(true)
         .show_output(false)
         .current_version(cargo_crate_version!())
@@ -151,7 +151,6 @@ async fn main() -> Result<()> {
 
     let cmd = options();
 
-    // TODO: move this to a separate method and call that method in shell()
     match cmd {
         Cmd::Run(f) => {
             let file = Project::new()?.identify(f.as_str())?;

@@ -270,7 +270,7 @@ impl QueryGrader {
     /// Selects entire method body and returns
     pub fn method_body_with_name(mut self, method_name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(include_str!("../../queries/method_body_with_name.scm"), method_name),
+            query:   format!(include_str!("../queries/method_body_with_name.scm"), method_name),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -281,7 +281,7 @@ impl QueryGrader {
     pub fn method_body_with_return_type(mut self, return_type: String) -> Self {
         self.queries.push(Query {
             query:   format!(
-                include_str!("../../queries/method_body_with_return_type.scm"),
+                include_str!("../queries/method_body_with_return_type.scm"),
                 return_type
             ),
             capture: "body".to_string(),
@@ -293,7 +293,7 @@ impl QueryGrader {
     /// Selects and returns the entire main method
     pub fn main_method(mut self) -> Self {
         self.queries.push(Query {
-            query:   include_str!("../../queries/main_method.scm").to_string(),
+            query:   include_str!("../queries/main_method.scm").to_string(),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -303,7 +303,7 @@ impl QueryGrader {
     /// Selects entire class body with name
     pub fn class_body_with_name(mut self, class_name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(include_str!("../../queries/class_with_name.scm"), class_name),
+            query:   format!(include_str!("../queries/class_with_name.scm"), class_name),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -323,7 +323,7 @@ impl QueryGrader {
     /// Selects local variable declaration statements with supplied name
     pub fn local_variables_with_name(mut self, name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(include_str!("../../queries/local_variable_with_name.scm"), name),
+            query:   format!(include_str!("../queries/local_variable_with_name.scm"), name),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -333,7 +333,7 @@ impl QueryGrader {
     /// Selects local variable declaration statements with supplied type
     pub fn local_variables_with_type(mut self, type_name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(include_str!("../../queries/local_variable_with_type.scm"), type_name),
+            query:   format!(include_str!("../queries/local_variable_with_type.scm"), type_name),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -373,7 +373,7 @@ impl QueryGrader {
     /// Selects method invocations
     pub fn method_invocations(mut self) -> Self {
         self.queries.push(Query {
-            query:   include_str!("../../queries/method_invocation.scm").to_string(),
+            query:   include_str!("../queries/method_invocation.scm").to_string(),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -383,7 +383,7 @@ impl QueryGrader {
     /// Selects method invocations with supplied name
     pub fn method_invocations_with_name(mut self, name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(include_str!("../../queries/method_invocations_with_name.scm"), name),
+            query:   format!(include_str!("../queries/method_invocations_with_name.scm"), name),
             capture: "body".to_string(),
             filter:  None,
         });
@@ -394,7 +394,7 @@ impl QueryGrader {
     pub fn method_invocations_with_arguments(mut self, name: String) -> Self {
         self.queries.push(Query {
             query:   format!(
-                include_str!("../../queries/method_invocations_with_arguments.scm"),
+                include_str!("../queries/method_invocations_with_arguments.scm"),
                 name
             ),
             capture: "body".to_string(),
@@ -406,10 +406,7 @@ impl QueryGrader {
     /// Selects method invocations with supplied object
     pub fn method_invocations_with_object(mut self, name: String) -> Self {
         self.queries.push(Query {
-            query:   format!(
-                include_str!("../../queries/method_invocations_with_object.scm"),
-                name
-            ),
+            query:   format!(include_str!("../queries/method_invocations_with_object.scm"), name),
             capture: "body".to_string(),
             filter:  None,
         });

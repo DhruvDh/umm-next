@@ -15,8 +15,6 @@ pub mod config;
 /// For discovering Java projects, analyzing them, and generating/executing
 /// build tasks
 pub mod java;
-/// For all parsers used
-pub mod parsers;
 /// Async process helpers shared across modules.
 pub mod process;
 /// Retrieval-mode definitions shared across languages.

@@ -411,7 +411,7 @@ pub fn build_active_retrieval_context(
     for function_call_arg in function_call_args.params {
         let file = proj.identify(&function_call_arg.class_name)?;
         let query = format!(
-            include_str!("../../queries/method_body_with_name.scm"),
+            include_str!("../queries/method_body_with_name.scm"),
             &function_call_arg.method_name
         );
 

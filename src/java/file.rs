@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use snailquote::unescape;
 
-use super::{parser::Parser, paths::ProjectPaths, project::Project};
+use super::{parser::Parser, parsers::parser, paths::ProjectPaths, project::Project};
 use crate::{
     Dict, config,
     java::{
@@ -21,7 +21,6 @@ use crate::{
             MAIN_METHOD_QUERY, METHOD_CALL_QUERY, PACKAGE_QUERY, TEST_ANNOTATION_QUERY,
         },
     },
-    parsers::parser,
     process::{self, StdinSource},
     util::{classpath, java_path, javac_path, sourcepath},
 };
@@ -81,18 +80,47 @@ fn normalize_stacktrace_line(line: &str) -> String {
     line.replace("\\\\", "\\").replace("\\\"", "\"")
 }
 
+/// Possible failures while decoding collected process output.
+#[derive(thiserror::Error, Debug)]
+enum DecodeOutputError {
+    /// The captured stderr stream could not be decoded as UTF-8.
+    #[error("Error parsing stderr as utf8")]
+    Stderr {
+        /// The underlying UTF-8 decoding failure.
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    /// The captured stdout stream could not be decoded as UTF-8.
+    #[error("Error parsing stdout as utf8")]
+    Stdout {
+        /// The underlying UTF-8 decoding failure.
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+    /// The combined output could not be unescaped with `snailquote`.
+    #[error("Error when un-escaping {phase} output.")]
+    Unescape {
+        /// Operation label identifying which phase failed (e.g., `javac`).
+        phase:  &'static str,
+        /// The upstream error raised by `snailquote::unescape`.
+        #[source]
+        source: snailquote::UnescapeError,
+    },
+}
+
 /// Decodes combined stdout/stderr output into a UTF-8 string and removes escape
 /// sequences.
 fn decode_output(
     stderr: Vec<u8>,
     stdout: Vec<u8>,
-    contexts: (&'static str, &'static str, &'static str),
-) -> Result<String> {
-    let (stderr_ctx, stdout_ctx, unescape_ctx) = contexts;
-    let mut decoded = String::from_utf8(stderr).context(stderr_ctx)?;
-    let stdout = String::from_utf8(stdout).context(stdout_ctx)?;
+    phase: &'static str,
+) -> Result<String, DecodeOutputError> {
+    let mut decoded =
+        String::from_utf8(stderr).map_err(|source| DecodeOutputError::Stderr { source })?;
+    let stdout =
+        String::from_utf8(stdout).map_err(|source| DecodeOutputError::Stdout { source })?;
     decoded.push_str(&stdout);
-    unescape(&decoded).context(unescape_ctx)
+    unescape(&decoded).map_err(|source| DecodeOutputError::Unescape { phase, source })
 }
 
 /// Loads source code from `path` and constructs a Java parser.
@@ -435,7 +463,7 @@ pub enum JavaFileError {
         /// javac stacktrace
         stacktrace: String,
         /// javac stacktrace, parsed with
-        /// [fn@crate::parsers::parser::parse_diag]
+        /// [fn@crate::java::parsers::parser::parse_diag]
         diags:      Vec<JavacDiagnostic>,
     },
     /// An error while running a Java file (running
@@ -459,6 +487,12 @@ pub enum JavaFileError {
     /// Unknown error
     #[error(transparent)]
     Unknown(#[from] anyhow::Error),
+}
+
+impl From<DecodeOutputError> for JavaFileError {
+    fn from(err: DecodeOutputError) -> Self {
+        JavaFileError::Unknown(err.into())
+    }
 }
 
 impl File {
@@ -534,7 +568,7 @@ impl File {
     async fn exec_main(
         &self,
         stdin_mode: StdinSource,
-        unescape_context: &'static str,
+        output_phase: &'static str,
     ) -> Result<String, JavaFileError> {
         if self.kind != FileType::ClassWithMain {
             return Err(JavaFileError::DuringCompilation {
@@ -555,15 +589,7 @@ impl File {
         } = Self::collect_process(java.as_os_str(), &args, stdin_mode, config::java_timeout())
             .await?;
 
-        let output = decode_output(
-            stderr,
-            stdout,
-            (
-                "Error when parsing stderr as utf8",
-                "Error when parsing stdout as utf8",
-                unescape_context,
-            ),
-        )?;
+        let output = decode_output(stderr, stdout, output_phase)?;
 
         if status.success() {
             Ok(output)
@@ -656,15 +682,7 @@ impl File {
         .await?;
 
         let process::Collected { stdout, stderr, .. } = collected;
-        let output = decode_output(
-            stderr,
-            stdout,
-            (
-                "Error when parsing stderr as utf8",
-                "Error when parsing stdout as utf8",
-                "Error when un-escaping javac output.",
-            ),
-        )?;
+        let output = decode_output(stderr, stdout, "javac")?;
 
         Ok(output)
     }
@@ -689,15 +707,7 @@ impl File {
             stdout,
             stderr,
         } = collected;
-        let output = decode_output(
-            stderr,
-            stdout,
-            (
-                "Error parsing stderr as utf8",
-                "Error parsing stdout as utf8",
-                "Error when un-escaping javac output.",
-            ),
-        )?;
+        let output = decode_output(stderr, stdout, "javac")?;
 
         if status.success() {
             Ok(output)
@@ -726,8 +736,7 @@ impl File {
             None => StdinSource::Inherit,
         };
 
-        self.exec_main(stdin_mode, "Error when escaping java output.")
-            .await
+        self.exec_main(stdin_mode, "java").await
     }
 
     /// Runs the java file while piping stdin even when no explicit input is
@@ -741,8 +750,7 @@ impl File {
             None => StdinSource::Bytes(Vec::new()),
         };
 
-        self.exec_main(stdin_mode, "Error when un-escaping javac output.")
-            .await
+        self.exec_main(stdin_mode, "java").await
     }
 
     /// A utility method that takes a list of strings (or types that implement
@@ -750,7 +758,8 @@ impl File {
     /// tests.
     ///
     /// Returns the output from JUnit as a string. There are parsers in
-    /// ['parsers module'][crate::parsers::parser] that helps parse this output.
+    /// ['parsers module'][crate::java::parsers::parser] that helps parse this
+    /// output.
     ///
     /// * `tests`: list of strings (or types that implement `Into<String>`)
     ///   meant to represent test method names,
@@ -798,15 +807,7 @@ impl File {
             stdout,
             stderr,
         } = collected;
-        let output = decode_output(
-            stderr,
-            stdout,
-            (
-                "Error when parsing stderr as utf8",
-                "Error when parsing stdout as utf8",
-                "Error when un-escaping JUnit output.",
-            ),
-        )?;
+        let output = decode_output(stderr, stdout, "JUnit")?;
 
         if status.success() {
             Ok(output)
@@ -850,8 +851,8 @@ impl File {
     /// tests.
     ///
     /// Returns the output from JUnit as a string. There are parsers in
-    /// ['parsers module'][crate::parsers::parser] that helps parse this output.
-    /// Get a reference to the file's kind.
+    /// ['parsers module'][crate::java::parsers::parser] that helps parse this
+    /// output. Get a reference to the file's kind.
     pub fn kind(&self) -> &FileType {
         &self.kind
     }
@@ -896,7 +897,7 @@ impl File {
     /// Returns full method bodies matching the provided name with their
     /// starting line numbers.
     pub fn method_bodies_named(&self, method_name: &str) -> Result<Vec<(String, usize)>> {
-        let query = format!(include_str!("../queries/method_body_with_name.scm"), method_name);
+        let query = format!(include_str!("queries/method_body_with_name.scm"), method_name);
         self.parser.query_capture_positions(&query, "body")
     }
 

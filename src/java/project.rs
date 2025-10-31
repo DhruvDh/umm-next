@@ -36,6 +36,8 @@ impl Project {
 
     /// Core implementation that discovers files for the provided paths.
     fn from_paths(paths: ProjectPaths) -> Result<Self> {
+        // TODO: When a typed Project builder lands, surface custom workspace layouts
+        // instead of hard-coding defaults.
         let mut files = vec![];
         let mut names = vec![];
 
