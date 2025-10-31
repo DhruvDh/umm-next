@@ -24,16 +24,9 @@ pub mod types;
 /// Utility functions for convenience
 pub mod util;
 use anyhow::Result;
-use rhai::Engine;
 
 /// Defined for convenience
 type Dict = std::collections::HashMap<String, String>;
-
-/// Creates and returns a new bare `Engine` placeholder while Rhai support is
-/// being phased out.
-pub fn create_engine() -> Engine {
-    Engine::new()
-}
 
 /// Prints the result of grading
 pub fn grade(_name_or_path: &str) -> Result<()> {

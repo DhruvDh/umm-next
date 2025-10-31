@@ -1,34 +1,26 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{fmt, sync::Arc};
 
 use anyhow::{Context, Result};
 use async_openai::types::ChatCompletionRequestSystemMessageArgs;
-use itertools::Itertools;
-use rhai::{AST, Array, Dynamic, FnPtr};
 use snailquote::unescape;
 
 use super::results::{Grade, GradeResult};
 use crate::{
-    config, create_engine,
+    config,
     java::{Parser, Project},
 };
 
-/// Lazily initialized Rhai AST storage retained while scripting is disabled.
-static SCRIPT_AST: OnceLock<Arc<Mutex<AST>>> = OnceLock::new();
-
-/// Shared Rhai AST placeholder retained while the grading flow migrates off
-/// Rhai.
-fn script_ast() -> &'static Arc<Mutex<AST>> {
-    SCRIPT_AST.get_or_init(|| Arc::new(Mutex::new(AST::empty())))
-}
-#[derive(Default, Debug, Clone)]
+/// Predicate invoked to keep query results that satisfy additional constraints.
+type QueryPredicate = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
+#[derive(Default, Clone)]
 /// A struct to represent a treesitter query.
 pub struct Query {
     /// The query to run.
     query:   String,
     /// The capture to extract from the query.
     capture: String,
-    /// A function pointer to filter the matches using. Must return a boolean.
-    filter:  Option<FnPtr>,
+    /// Optional predicate applied to captured matches to refine the results.
+    filter:  Option<QueryPredicate>,
 }
 
 impl Query {
@@ -59,15 +51,27 @@ impl Query {
         self
     }
 
-    /// Gets the function to filter the results of the query.
-    pub fn filter(&self) -> Option<FnPtr> {
+    /// Returns the optional predicate used to filter captured results.
+    pub fn filter(&self) -> Option<QueryPredicate> {
         self.filter.clone()
     }
 
-    /// Set the function to filter the results of the query.
-    pub fn set_filter(mut self, filter: FnPtr) -> Self {
-        self.filter = Some(filter);
+    /// Sets the predicate used to filter captured results.
+    pub fn set_filter_fn<F>(mut self, filter: F) -> Self
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.filter = Some(Arc::new(filter));
         self
+    }
+}
+
+impl fmt::Debug for Query {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Query")
+            .field("query", &self.query)
+            .field("capture", &self.capture)
+            .finish()
     }
 }
 
@@ -245,7 +249,7 @@ impl QueryGrader {
         Ok(self)
     }
 
-    /// Adds a capture to the last query.
+    /// Adds a predicate that filters results from the most recent query.
     /// If no queries have been added, this will throw an error.
     pub fn capture(#[allow(unused_mut)] mut self, c: String) -> Result<Self, QueryError> {
         if let Some(last) = self.queries.last_mut() {
@@ -258,9 +262,12 @@ impl QueryGrader {
 
     /// Adds a capture to the last query.
     /// If no queries have been added, this will throw an error.
-    pub fn filter(#[allow(unused_mut)] mut self, f: FnPtr) -> Result<Self, QueryError> {
+    pub fn filter<F>(#[allow(unused_mut)] mut self, f: F) -> Result<Self, QueryError>
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
         if let Some(last) = self.queries.last_mut() {
-            *last = last.clone().set_filter(f);
+            *last = last.clone().set_filter_fn(f);
             Ok(self)
         } else {
             Err(QueryError::NoPreviousQuery)
@@ -413,15 +420,11 @@ impl QueryGrader {
         self
     }
 
-    /// Runs the queries, and returns the result.
+    /// Runs the configured queries and returns the captured results.
     /// TODO: Make it so that it doesn't parse a new piece of code, just filters
     /// out the irrelevant line ranges. This performs better but more
     /// importantly is more accurate.
-    pub fn run_query(&self) -> Result<Dynamic, QueryError> {
-        let engine = create_engine();
-        let ast = Arc::clone(script_ast());
-        let ast = ast.lock().unwrap();
-
+    pub fn run_query(&self) -> Result<Vec<String>, QueryError> {
         let first = self
             .queries
             .first()
@@ -432,30 +435,28 @@ impl QueryGrader {
             .identify(self.file())
             .map_err(|_| QueryError::FileNotFound(self.file().to_string()))?;
 
-        let mut matches: Vec<String> = match file.query(&first.query()) {
+        let mut matches = match file.query(&first.query()) {
             Ok(m) => {
                 if first.capture().is_empty() {
                     return Err(QueryError::NoCaptureSelected(format!("{:#?}", first)));
                 }
-                let result = m
-                    .iter()
-                    .filter_map(|map| map.get(&first.capture()))
-                    .cloned();
-
-                let result: Vec<String> = if let Some(f) = first.filter() {
-                    result
-                        .filter(|x| f.call(&engine, &ast, (x.clone(),)).unwrap_or(false))
-                        .collect()
-                } else {
-                    result.collect()
-                };
-
                 if m.is_empty() {
                     return Err(QueryError::NoMatchesFound(
                         unescape(&format!("{:#?}", first)).context("Unescape error")?,
                     ));
                 }
-                result
+
+                let mut captured: Vec<String> = m
+                    .iter()
+                    .filter_map(|map| map.get(&first.capture()))
+                    .cloned()
+                    .collect();
+
+                if let Some(predicate) = first.filter() {
+                    captured.retain(|value| predicate(value));
+                }
+
+                captured
             }
             Err(e) => {
                 return Err(QueryError::DuringQueryExecution {
@@ -465,54 +466,50 @@ impl QueryGrader {
             }
         };
 
-        if self.queries.len() == 1 {
-            return Ok(matches.into());
-        }
-
-        for (prev_q, q) in self.queries().into_iter().tuple_windows() {
+        for (index, query) in self.queries.iter().enumerate().skip(1) {
             if matches.is_empty() {
+                let previous = &self.queries[index - 1];
                 return Err(QueryError::NoMatchesFound(
-                    unescape(&format!("{:#?}", prev_q)).context("Unescape error")?,
+                    unescape(&format!("{:#?}", previous)).context("Unescape error")?,
                 ));
             }
 
-            if q.capture().is_empty() {
-                return Err(QueryError::NoCaptureSelected(format!("{:#?}", q)));
+            if query.capture().is_empty() {
+                return Err(QueryError::NoCaptureSelected(format!("{:#?}", query)));
             }
 
-            let mut new_matches = vec![];
+            let mut new_matches = Vec::new();
+            let current_matches = std::mem::take(&mut matches);
 
-            for code in matches {
-                let parser = Parser::new(code)
-                    .context(format!("Failed to create parser for query: `{}`", q.query()))?;
+            for snippet in current_matches {
+                let parser = Parser::new(snippet.clone())
+                    .context(format!("Failed to create parser for query: `{}`", query.query()))
+                    .map_err(QueryError::Unknown)?;
 
-                match parser.query(&q.query()) {
-                    Ok(m) => {
-                        let result = m.iter().filter_map(|map| map.get(&q.capture())).cloned();
-
-                        let mut result: Vec<String> = if let Some(f) = q.filter() {
-                            result
-                                .filter(|x| f.call(&engine, &ast, (x.clone(),)).unwrap_or(false))
-                                .collect()
-                        } else {
-                            result.collect()
-                        };
-
-                        new_matches.append(&mut result)
-                    }
-                    Err(e) => {
-                        return Err(QueryError::DuringQueryExecution {
-                            q: q.query(),
+                let raw =
+                    parser
+                        .query(&query.query())
+                        .map_err(|e| QueryError::DuringQueryExecution {
+                            q: query.query(),
                             e: format!("{:#?}", e),
-                        });
-                    }
-                };
+                        })?;
+
+                let mut captured: Vec<String> = raw
+                    .iter()
+                    .filter_map(|map| map.get(&query.capture()))
+                    .cloned()
+                    .collect();
+
+                if let Some(predicate) = query.filter() {
+                    captured.retain(|value| predicate(value));
+                }
+
+                new_matches.extend(captured);
             }
 
             matches = new_matches;
         }
-
-        Ok(matches.into())
+        Ok(matches)
     }
 
     /// Grades the file according to the supplied queries, captures, and
@@ -537,11 +534,8 @@ impl QueryGrader {
         };
 
         let prompt_set = config::java_prompts();
-        let result: Vec<String> = match self.run_query() {
-            Ok(r) => {
-                let r: Array = r.cast();
-                r.into_iter().map(|s| s.cast()).collect()
-            }
+        let result = match self.run_query() {
+            Ok(matches) => matches,
             Err(e) => {
                 return Ok(GradeResult {
                     requirement: self.req_name.clone(),

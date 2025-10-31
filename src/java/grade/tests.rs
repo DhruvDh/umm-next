@@ -5,7 +5,6 @@ use async_openai::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
 };
-use rhai::{Array, Dynamic};
 use tabled::tables::ExtendedTable;
 use tokio::fs as async_fs;
 
@@ -52,10 +51,10 @@ struct MutationInputs {
 /// passing.
 pub struct ByUnitTestGrader {
     /// A list of test files to run.
-    test_files:     Array,
+    test_files:     Vec<String>,
     /// A list of test names that should be found. Grade returned is 0 if any
     /// are not found.
-    expected_tests: Array,
+    expected_tests: Vec<String>,
     /// A reference to the project the test files belong to.
     project:        Project,
     /// Maximum possible grade.
@@ -66,24 +65,32 @@ pub struct ByUnitTestGrader {
 
 impl ByUnitTestGrader {
     /// Getter for test_files
-    pub fn test_files(&self) -> Array {
-        self.test_files.clone()
+    pub fn test_files(&self) -> &[String] {
+        &self.test_files
     }
 
     /// Setter for test_files
-    pub fn set_test_files(mut self, test_files: Array) -> Self {
-        self.test_files = test_files;
+    pub fn set_test_files<I, S>(mut self, test_files: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.test_files = test_files.into_iter().map(Into::into).collect();
         self
     }
 
     /// Getter for expected_tests
-    pub fn expected_tests(&self) -> Array {
-        self.expected_tests.clone()
+    pub fn expected_tests(&self) -> &[String] {
+        &self.expected_tests
     }
 
     /// Setter for expected_tests
-    pub fn set_expected_tests(mut self, expected_tests: Array) -> Self {
-        self.expected_tests = expected_tests;
+    pub fn set_expected_tests<I, S>(mut self, expected_tests: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.expected_tests = expected_tests.into_iter().map(Into::into).collect();
         self
     }
 
@@ -133,10 +140,6 @@ impl ByUnitTestGrader {
         } = self;
 
         let prompts = config::java_prompts();
-        let test_files = Self::array_to_strings("test_files", test_files)
-            .context("While decoding configured test files")?;
-        let expected_tests = Self::array_to_strings("expected_tests", expected_tests)
-            .context("While decoding expected test names")?;
         let files = Self::resolve_test_files(&project, &test_files)
             .context("While resolving test files for execution")?;
 
@@ -184,20 +187,6 @@ impl ByUnitTestGrader {
             reason:      format!("- {total_passed}/{total_tests} tests passing."),
             prompt:      Some(messages),
         })
-    }
-
-    /// Converts a Rhai array into owned strings with annotated conversion
-    /// errors.
-    fn array_to_strings(label: &str, values: Array) -> Result<Vec<String>> {
-        values
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
-                value.into_string().map_err(|err| {
-                    anyhow!("{label}[{index}] expected string-compatible value: {err}")
-                })
-            })
-            .collect()
     }
 
     /// Resolves string-based test file names into `File` handles.
@@ -456,13 +445,13 @@ pub struct UnitTestGrader {
     /// Maximum possible grade.
     pub out_of:           f64,
     /// List of test classes to run.
-    pub target_test:      Array,
+    pub target_test:      Vec<String>,
     /// List of classes to mutate.
-    pub target_class:     Array,
+    pub target_class:     Vec<String>,
     /// List of methods to exclude from mutation.
-    pub excluded_methods: Array,
+    pub excluded_methods: Vec<String>,
     /// List of classes to avoid mutating.
-    pub avoid_calls_to:   Array,
+    pub avoid_calls_to:   Vec<String>,
 }
 
 impl UnitTestGrader {
@@ -477,23 +466,23 @@ impl UnitTestGrader {
     }
 
     /// A getter for the list of test classes to run.
-    pub fn get_target_test(&self) -> Array {
-        self.target_test.clone()
+    pub fn get_target_test(&self) -> &[String] {
+        &self.target_test
     }
 
     /// A getter for the list of classes to mutate.
-    pub fn get_target_class(&self) -> Array {
-        self.target_class.clone()
+    pub fn get_target_class(&self) -> &[String] {
+        &self.target_class
     }
 
     /// A getter for the list of methods to exclude from mutation.
-    pub fn get_excluded_methods(&self) -> Array {
-        self.excluded_methods.clone()
+    pub fn get_excluded_methods(&self) -> &[String] {
+        &self.excluded_methods
     }
 
     /// A getter for the list of classes to avoid mutating.
-    pub fn get_avoid_calls_to(&self) -> Array {
-        self.avoid_calls_to.clone()
+    pub fn get_avoid_calls_to(&self) -> &[String] {
+        &self.avoid_calls_to
     }
 
     /// A setter for the name of the requirement.
@@ -509,26 +498,42 @@ impl UnitTestGrader {
     }
 
     /// A setter for the list of test classes to run.
-    pub fn set_target_test(mut self, target_test: Array) -> Self {
-        self.target_test = target_test;
+    pub fn set_target_test<I, S>(mut self, target_test: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.target_test = target_test.into_iter().map(Into::into).collect();
         self
     }
 
     /// A setter for the list of classes to mutate.
-    pub fn set_target_class(mut self, target_class: Array) -> Self {
-        self.target_class = target_class;
+    pub fn set_target_class<I, S>(mut self, target_class: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.target_class = target_class.into_iter().map(Into::into).collect();
         self
     }
 
     /// A setter for the list of methods to exclude from mutation.
-    pub fn set_excluded_methods(mut self, excluded_methods: Array) -> Self {
-        self.excluded_methods = excluded_methods;
+    pub fn set_excluded_methods<I, S>(mut self, excluded_methods: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.excluded_methods = excluded_methods.into_iter().map(Into::into).collect();
         self
     }
 
     /// A setter for the list of classes to avoid mutating.
-    pub fn set_avoid_calls_to(mut self, avoid_calls_to: Array) -> Self {
-        self.avoid_calls_to = avoid_calls_to;
+    pub fn set_avoid_calls_to<I, S>(mut self, avoid_calls_to: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.avoid_calls_to = avoid_calls_to.into_iter().map(Into::into).collect();
         self
     }
 
@@ -559,34 +564,13 @@ impl UnitTestGrader {
         }
     }
 
-    /// Converts a Rhai array into a `Vec<String>` with labelled conversion
-    /// errors.
-    fn array_to_strings(label: &str, values: Array) -> Result<Vec<String>> {
-        values
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
-                value.into_string().map_err(|err| {
-                    anyhow!("{label}[{index}] expected string-compatible value: {err}")
-                })
-            })
-            .collect()
-    }
-
     /// Normalizes configured mutation grader inputs into owned collections.
     fn normalize_inputs(&self) -> Result<MutationInputs> {
         Ok(MutationInputs {
-            target_tests:     Self::array_to_strings("target_test", self.get_target_test())
-                .context("While decoding target tests")?,
-            target_classes:   Self::array_to_strings("target_class", self.get_target_class())
-                .context("While decoding target classes")?,
-            excluded_methods: Self::array_to_strings(
-                "excluded_methods",
-                self.get_excluded_methods(),
-            )
-            .context("While decoding excluded methods")?,
-            avoid_calls_to:   Self::array_to_strings("avoid_calls_to", self.get_avoid_calls_to())
-                .context("While decoding avoid_calls_to entries")?,
+            target_tests:     self.target_test.clone(),
+            target_classes:   self.target_class.clone(),
+            excluded_methods: self.excluded_methods.clone(),
+            avoid_calls_to:   self.avoid_calls_to.clone(),
         })
     }
 
@@ -659,7 +643,7 @@ impl UnitTestGrader {
         let surviving = Self::load_surviving_mutations(project)
             .await
             .context("While loading mutation report")?;
-        let penalty = surviving.len() as u32 * 4;
+        let penalty = surviving.len() as f64 * 4.0;
 
         eprintln!("Ran mutation tests for {} -", inputs.target_tests.join(", "));
         eprintln!("Problematic mutation test failures printed above.");
@@ -667,12 +651,12 @@ impl UnitTestGrader {
         let prompt = Self::build_mutation_success_prompt(project, prompts, &inputs, &surviving)
             .context("Failed to build mutation failure prompt")?;
 
-        let grade_value = (out_of as u32).saturating_sub(penalty).into();
+        let grade_value = (out_of - penalty).max(0.0);
 
         Ok(GradeResult {
             requirement: req_name,
             grade: Grade::new(grade_value, out_of),
-            reason: format!("-{penalty} Penalty due to surviving mutations"),
+            reason: format!("-{penalty:.0} Penalty due to surviving mutations"),
             prompt,
         })
     }
@@ -903,8 +887,8 @@ impl ByHiddenTestGrader {
         };
 
         let grader = ByUnitTestGrader {
-            test_files: vec![Dynamic::from(test_class_name)],
-            expected_tests: Array::new(),
+            test_files: vec![test_class_name],
+            expected_tests: Vec::new(),
             project,
             out_of,
             req_name,
