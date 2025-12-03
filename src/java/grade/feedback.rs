@@ -1,7 +1,7 @@
 use std::fs;
 
 use anyhow::{Context, Result, anyhow};
-use async_openai::types::ChatCompletionRequestMessage;
+use async_openai::types::chat::ChatCompletionRequestMessage;
 use serde::Serialize;
 use serde_json;
 use tokio::{runtime::Runtime, task::block_in_place};

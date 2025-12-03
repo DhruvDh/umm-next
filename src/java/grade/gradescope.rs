@@ -5,7 +5,7 @@ use async_openai::{
     Client as OpenAIClient,
     config::OpenAIConfig,
     error::OpenAIError,
-    types::{
+    types::chat::{
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         CreateChatCompletionRequest, CreateChatCompletionResponse,
     },
@@ -236,6 +236,7 @@ enum SLOFileType {
     SourceAndTest,
 }
 
+/// Renders the combined SLO report used in Gradescope artifacts.
 async fn generate_combined_slo_report(
     slo_responses: Vec<(&str, Result<CreateChatCompletionResponse, OpenAIError>)>,
     openai: &OpenAiEnv,

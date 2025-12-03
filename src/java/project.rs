@@ -1,5 +1,7 @@
-use anyhow::{Context, Result, bail};
-use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs};
+use anyhow::{Context, Result, anyhow};
+use async_openai::types::chat::{
+    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{file::File, paths::ProjectPaths};
@@ -60,11 +62,6 @@ impl Project {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_paths_for_tests(paths: ProjectPaths) -> Result<Self> {
-        Self::from_paths(paths)
-    }
-
     /// Attempts to identify the correct file from the project from a partial or
     /// fully formed name as expected by a java compiler.
     ///
@@ -72,16 +69,15 @@ impl Project {
     ///
     /// * `name`: partial/fully formed name of the Java file to look for.
     pub fn identify(&self, name: &str) -> Result<File> {
-        if let Some(index) = self.locate_index(name) {
-            Ok(self.files[index].clone())
-        } else {
-            bail!("Could not find {} in the project", name)
-        }
+        let Some(index) = self.match_index(name) else {
+            return Err(anyhow!("Could not find {} in the project", name));
+        };
+        Ok(self.files[index].clone())
     }
 
     /// Returns true if project contains a file with the given name.
     pub fn contains(&self, name: &str) -> bool {
-        self.locate_index(name).is_some()
+        self.match_index(name).is_some()
     }
 
     /// Returns the workspace paths associated with this project.
@@ -122,7 +118,7 @@ impl Project {
 
 impl Project {
     /// Attempts to locate the index of a file that matches the provided name.
-    fn locate_index(&self, name: &str) -> Option<usize> {
+    fn match_index(&self, name: &str) -> Option<usize> {
         self.names
             .iter()
             .position(|n| n == name)

@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc};
 
 use anyhow::{Context, Result};
-use async_openai::types::ChatCompletionRequestSystemMessageArgs;
+use async_openai::types::chat::ChatCompletionRequestSystemMessageArgs;
 use snailquote::unescape;
 
 use super::results::{Grade, GradeResult};
@@ -30,8 +30,11 @@ impl Query {
     }
 
     /// Gets the query to run.
-    pub fn query(&self) -> String {
-        unescape(&format!("{:#?}", self.query)).unwrap()
+    pub fn query(&self) -> Result<String, QueryError> {
+        unescape(&format!("{:#?}", self.query)).map_err(|e| QueryError::DuringQueryExecution {
+            q: self.query.clone(),
+            e: e.to_string(),
+        })
     }
 
     /// Sets the query to run.
@@ -435,15 +438,15 @@ impl QueryGrader {
             .identify(self.file())
             .map_err(|_| QueryError::FileNotFound(self.file().to_string()))?;
 
-        let mut matches = match file.query(&first.query()) {
+        let first_query = first.query()?;
+
+        let mut matches = match file.query(&first_query) {
             Ok(m) => {
                 if first.capture().is_empty() {
                     return Err(QueryError::NoCaptureSelected(format!("{:#?}", first)));
                 }
                 if m.is_empty() {
-                    return Err(QueryError::NoMatchesFound(
-                        unescape(&format!("{:#?}", first)).context("Unescape error")?,
-                    ));
+                    return Err(QueryError::NoMatchesFound(first_query.clone()));
                 }
 
                 let mut captured: Vec<String> = m
@@ -460,7 +463,7 @@ impl QueryGrader {
             }
             Err(e) => {
                 return Err(QueryError::DuringQueryExecution {
-                    q: first.query(),
+                    q: first_query.clone(),
                     e: format!("{:#?}", e),
                 });
             }
@@ -469,9 +472,7 @@ impl QueryGrader {
         for (index, query) in self.queries.iter().enumerate().skip(1) {
             if matches.is_empty() {
                 let previous = &self.queries[index - 1];
-                return Err(QueryError::NoMatchesFound(
-                    unescape(&format!("{:#?}", previous)).context("Unescape error")?,
-                ));
+                return Err(QueryError::NoMatchesFound(previous.query()?));
             }
 
             if query.capture().is_empty() {
@@ -481,16 +482,18 @@ impl QueryGrader {
             let mut new_matches = Vec::new();
             let current_matches = std::mem::take(&mut matches);
 
+            let query_src = query.query()?;
+
             for snippet in current_matches {
                 let parser = Parser::new(snippet.clone())
-                    .context(format!("Failed to create parser for query: `{}`", query.query()))
+                    .context(format!("Failed to create parser for query: `{}`", query_src))
                     .map_err(QueryError::Unknown)?;
 
                 let raw =
                     parser
-                        .query(&query.query())
+                        .query(&query_src)
                         .map_err(|e| QueryError::DuringQueryExecution {
-                            q: query.query(),
+                            q: query_src.clone(),
                             e: format!("{:#?}", e),
                         })?;
 

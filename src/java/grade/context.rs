@@ -1,10 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::RangeInclusive,
+    time::Duration,
 };
 
-use anyhow::{Context, Result};
-use async_openai::types::{
+use anyhow::{Context, Result, anyhow, bail};
+use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs, CreateChatCompletionResponse,
 };
@@ -30,6 +31,8 @@ struct RenderedSnippet {
     methods: HashSet<String>,
 }
 
+/// Map of fully qualified file names to the set of method identifiers found in
+/// snippets.
 type MethodsByFile = HashMap<String, HashSet<String>>;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -112,6 +115,7 @@ async fn perform_retrieval_request(
 ) -> Result<CreateChatCompletionResponse> {
     let response = client
         .post(endpoint)
+        .timeout(Duration::from_secs(60))
         .body(payload)
         .send()
         .await
@@ -119,10 +123,11 @@ async fn perform_retrieval_request(
         .error_for_status()
         .context("Retrieval service returned error status")?;
 
-    response
-        .json::<CreateChatCompletionResponse>()
+    let parsed: CreateChatCompletionResponse = response
+        .json()
         .await
-        .context("Failed to deserialize retrieval response")
+        .context("Failed to deserialize retrieval response")?;
+    Ok(parsed)
 }
 
 /// Resolves `LineRef`s to concrete files and expands them into inclusive
@@ -390,6 +395,10 @@ pub fn build_active_retrieval_context(
     proj: &Project,
     grader_output: String,
 ) -> Result<ChatCompletionRequestMessage> {
+    if !config::active_retrieval_enabled() {
+        bail!("Active retrieval is disabled");
+    }
+
     let messages = compose_retrieval_messages(proj, grader_output.as_str())?;
     let response = invoke_retrieval_service(&messages)?;
     let choice = response
@@ -402,7 +411,10 @@ pub fn build_active_retrieval_context(
         .tool_calls
         .as_ref()
         .context("No function call found in response message")?;
-    let function_call = tool_calls.first().context("Function call list was empty")?;
+    let function_call = match tool_calls.first().context("Function call list was empty")? {
+        async_openai::types::chat::ChatCompletionMessageToolCalls::Function(call) => call,
+        _ => return Err(anyhow!("First tool call was not a function")),
+    };
     let args = &function_call.function.arguments;
     let function_call_args: RetrievalFunctionCallParamsArray =
         serde_json::from_str(args).context("Failed to parse retrieval function arguments")?;
@@ -503,160 +515,4 @@ pub fn get_source_context<T: Into<LineRef>>(
             full_file_ratio: config::heuristic_full_file_ratio(),
         },
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        path::PathBuf,
-    };
-
-    use async_openai::types::{
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageContent,
-        ChatCompletionRequestSystemMessageContentPart,
-    };
-
-    use super::*;
-    use crate::{java::ProjectPaths, retrieval::HeuristicConfig};
-
-    fn system_content_to_string(content: ChatCompletionRequestSystemMessageContent) -> String {
-        match content {
-            ChatCompletionRequestSystemMessageContent::Text(text) => text,
-            ChatCompletionRequestSystemMessageContent::Array(parts) => parts
-                .into_iter()
-                .map(|part| match part {
-                    ChatCompletionRequestSystemMessageContentPart::Text(text_part) => {
-                        text_part.text
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(""),
-        }
-    }
-
-    fn load_fixture_project(fixture: &str) -> Project {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/java")
-            .join(fixture);
-        let paths = ProjectPaths::new(root);
-        Project::from_paths_for_tests(paths).expect("failed to load fixture project")
-    }
-
-    #[test]
-    fn heuristic_context_emits_snippet_with_numbering() {
-        let project = load_fixture_project("arraylist-example-solution");
-        let line_ref = LineRef {
-            file_name:   "DataStructures.ArrayList".to_string(),
-            line_number: 107,
-        };
-        let config = HeuristicConfig {
-            start_offset:    2,
-            num_lines:       6,
-            max_line_refs:   2,
-            full_file_ratio: 0.6,
-        };
-
-        let message = build_heuristic_context(vec![line_ref], project, config)
-            .expect("failed to build heuristic context");
-
-        let ChatCompletionRequestMessage::System(system_message) = message else {
-            panic!("expected system message");
-        };
-
-        let content = system_content_to_string(system_message.content);
-        assert!(content.contains("You cannot see all of the student's submission"));
-        assert!(content.contains("DataStructures.ArrayList"));
-        assert!(content.contains("return remove(0);"));
-        assert!(content.contains("throw new NoSuchElementException(\"List is empty.\");"));
-        assert!(content.contains("101|  public T removeFirst()"));
-    }
-
-    #[test]
-    fn snippet_bounds_clamped_when_range_exceeds_file() {
-        let bounds = compute_snippet_bounds(10, &(15..=15), 0.6);
-        assert_eq!(bounds, (9, 9));
-    }
-
-    #[test]
-    fn snippet_bounds_expand_to_full_file_when_threshold_exceeded() {
-        let bounds = compute_snippet_bounds(20, &(0..=19), 0.6);
-        assert_eq!(bounds, (0, 19));
-    }
-
-    #[test]
-    fn collect_method_sections_includes_each_method_once() {
-        let project = load_fixture_project("arraylist-example-solution");
-        let mut methods = HashSet::new();
-        methods.insert("remove".to_string());
-        let mut map = HashMap::new();
-        map.insert("DataStructures.ArrayList".to_string(), methods);
-
-        let sections = collect_method_body_sections(&project, &map).expect("method sections");
-        let message_count = sections
-            .iter()
-            .filter(|line| line.contains("Method body from student's submission `"))
-            .count();
-        assert_eq!(message_count, 1, "expected exactly one method body header");
-        assert!(
-            sections
-                .iter()
-                .any(|line| line.contains("ArrayList#remove"))
-        );
-    }
-
-    #[test]
-    fn render_snippet_includes_invocations_on_range_edges() {
-        let project = load_fixture_project("arraylist-example-solution");
-        let file = project
-            .identify("DataStructures.ArrayList")
-            .expect("fixture file");
-        let range = 102..=108;
-        let rendered = render_snippet(
-            &file,
-            &LineRef {
-                file_name:   file.proper_name(),
-                line_number: 107,
-            },
-            &range,
-            0.6,
-        )
-        .expect("render snippet");
-        assert!(rendered.methods.contains("remove"));
-        assert!(rendered.methods.contains("isEmpty"));
-    }
-
-    #[test]
-    fn method_sections_preserve_capture_line_numbers() {
-        let project = load_fixture_project("arraylist-example-solution");
-        let mut methods = HashSet::new();
-        methods.insert("removeFirst".to_string());
-        let mut map = HashMap::new();
-        map.insert("DataStructures.ArrayList".to_string(), methods);
-
-        let sections = collect_method_body_sections(&project, &map).expect("method sections");
-        let header_index = sections
-            .iter()
-            .position(|line| {
-                line.contains(
-                    "Method body from student's submission `DataStructures.ArrayList#removeFirst`",
-                )
-            })
-            .expect("method header present");
-        let body_block = &sections[header_index + 1];
-        let expected_start = project
-            .identify("DataStructures.ArrayList")
-            .expect("fixture file")
-            .method_bodies_named("removeFirst")
-            .expect("method body lookup")
-            .first()
-            .map(|(_, line)| *line)
-            .expect("method body line");
-        assert!(
-            body_block.starts_with(&format!("\n```\n{}|", expected_start)),
-            "expected body to start with numbered line {} but saw {}",
-            expected_start,
-            body_block
-        );
-    }
 }

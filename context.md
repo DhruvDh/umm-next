@@ -1,8 +1,8 @@
 # Repository Context And Migration Notes
 
-> **Status — Updated 2025-09-28**
+> **Status — Updated 2025-12-03**
 >
-> - **CLI `grade`:** Disabled on **main**. The embedded Python prototype exists **only** on the `try-python-scripting` branch and remains under evaluation.
+> - **CLI `grade`:** Executes Rune scripts on **main** (pass a `.rn` path). The embedded Python prototype exists **only** on the `try-python-scripting` branch and remains under evaluation.
 > - **Scripting:** **Decision pending.** Python bindings (embedded runtime) are under trial on `try-python-scripting`. Rune design notes are retained **as deferred reference** until a decision is made.
 > - **Rhai:** Entry flow removed; residual types compile but are inert without the Rhai entrypoint.
 > - **Module layout:** Java sources live under `src/java/*`; configuration and prompts live in `src/config.rs`; `src/constants.rs` is intentionally empty.
@@ -64,7 +64,7 @@
    - `umm java run <ClassWithMain>`
    - `umm java test <TestClass> [tests...]`
    - `umm java doc-check <Class>`
-   - `umm grade <...>` → expect the “temporarily unavailable” message on `main`.
+   - `umm grade <path/to/script.rn>` → compiles and executes the Rune script’s async `main()`.
 4. **Read the code in this order**
    - Paths: `src/java/paths.rs`
    - Config/runtime: `src/config.rs`
@@ -79,7 +79,7 @@
 | `umm java check <Class>`         | Java class name                   | Compiles and prints diagnostics               | `0` on success; non-zero on compiler errors     |
 | `umm java test <TestClass> …`    | Test class, optional test names   | Runs JUnit on existing classpath              | `0` on pass; non-zero on failing tests          |
 | `umm java doc-check <Class>`     | Java class name                   | Runs `javac -Xdoclint` for documentation lint | `0` on clean; non-zero on warnings/errors       |
-| `umm grade <...>` (main)    | Any args                          | None; prints disabled message                 | Always prints “grade is temporarily unavailable”|
+| `umm grade <path/to/script.rn>` | Rune script path                   | Compiles then executes the script’s async `main()` | `0` on script success; non-zero on compilation/runtime error |
 
 ## Environment Variables (main)
 
@@ -226,7 +226,7 @@
 ## Design Rationale & Invariants
 
 - Paths must remain instance-scoped; avoid reintroducing globals.
-- `grade` stays disabled until the scripting story is ready; any interim work must keep the failure mode obvious.
+- `grade` currently executes Rune scripts on main; keep behavior documented while the long-term scripting story is finalized.
 - Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
 
 ## Definition of Done (main)
@@ -355,7 +355,7 @@ Recent Cleanups (reference)
 - `umm java run <ClassWithMain>` — runs the Java class with discovered paths.
 - `umm java test <TestClass> [tests...]` — uses existing classpath; ensure JUnit jars are present locally.
 - `umm java doc-check <Class>` — runs `javac -Xdoclint`.
-- `umm grade <...>` — returns the disabled-message on main; use the branch prototype only for the Python trial.
+- `umm grade <path/to/script.rn>` — compiles and executes a Rune script (mainline behavior).
 
 ## Contact Points (Authoritative)
 
@@ -433,7 +433,7 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 #### Decision Reminder
 
-- Treat these notes as exploratory. Mainline `grade` stays disabled until Rune vs Python decision is made and documented in the Status banner.
+- Treat these notes as exploratory. Mainline `grade` currently runs Rune scripts; update the Status banner if the scripting decision changes.
 
 ---
 

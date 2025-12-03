@@ -1,7 +1,7 @@
-use std::{collections::HashSet, ffi::OsString};
+use std::{collections::HashSet, ffi::OsString, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
-use async_openai::types::{
+use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
 };
@@ -298,6 +298,20 @@ impl ByUnitTestGrader {
             .map_err(|err| anyhow!("Failed to build system message: {err}"))
     }
 
+    /// Drops diagnostics that refer to files outside the current project.
+    fn filter_known_diags<T>(project: &Project, diags: Vec<T>) -> Vec<T>
+    where
+        T: Into<LineRef> + Clone,
+    {
+        diags
+            .into_iter()
+            .filter(|d| {
+                let lr: LineRef = d.clone().into();
+                project.identify(lr.file_name()).is_ok()
+            })
+            .collect()
+    }
+
     /// Normalizes JUnit stacktraces, removing external frames and decoding
     /// escapes.
     fn process_junit_stacktrace(
@@ -376,13 +390,17 @@ impl ByUnitTestGrader {
                     .context("Failed to build failed-tests message")?,
                 );
                 messages.push(
-                    build_context_message(project, Some(grader_output.clone()), diags)
-                        .with_context(|| {
-                            format!(
-                                "Failed to build retrieval context for failed tests in {}",
-                                file.proper_name()
-                            )
-                        })?,
+                    build_context_message(
+                        project,
+                        Some(grader_output.clone()),
+                        Self::filter_known_diags(project, diags),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to build retrieval context for failed tests in {}",
+                            file.proper_name()
+                        )
+                    })?,
                 );
                 let (tests_passed, tests_total) = Self::parse_summary_counts(&test_results);
                 Ok(TestRunOutcome {
@@ -408,12 +426,15 @@ impl ByUnitTestGrader {
                     Self::build_user_message(body)
                         .context("Failed to build compiler-error message")?,
                 );
-                messages.push(build_context_message(project, None, diags).with_context(|| {
-                    format!(
-                        "Failed to build retrieval context for compiler errors in {}",
-                        file.proper_name()
-                    )
-                })?);
+                messages.push(
+                    build_context_message(project, None, Self::filter_known_diags(project, diags))
+                        .with_context(|| {
+                            format!(
+                                "Failed to build retrieval context for compiler errors in {}",
+                                file.proper_name()
+                            )
+                        })?,
+                );
                 Ok(TestRunOutcome {
                     tests_passed: 0.0,
                     tests_total: 0.0,
@@ -427,12 +448,15 @@ impl ByUnitTestGrader {
                     Self::build_user_message(body)
                         .context("Failed to build runtime-error message")?,
                 );
-                messages.push(build_context_message(project, None, diags).with_context(|| {
-                    format!(
-                        "Failed to build retrieval context for runtime errors in {}",
-                        file.proper_name()
-                    )
-                })?);
+                messages.push(
+                    build_context_message(project, None, Self::filter_known_diags(project, diags))
+                        .with_context(|| {
+                            format!(
+                                "Failed to build retrieval context for runtime errors in {}",
+                                file.proper_name()
+                            )
+                        })?,
+                );
                 Ok(TestRunOutcome {
                     tests_passed: 0.0,
                     tests_total: 0.0,
@@ -876,30 +900,75 @@ impl ByHiddenTestGrader {
     /// Grades using hidden tests. Test file is downloaded, ran, and then
     /// cleaned up before returning.
     pub async fn grade_by_hidden_tests(&self) -> Result<GradeResult> {
+        const MAX_HIDDEN_TEST_BYTES: usize = 5 * 1024 * 1024;
+
         let url = self.url();
         let test_class_name = self.test_class_name();
         let out_of = self.out_of();
         let req_name = self.req_name();
 
-        let test_source = reqwest::get(&url)
+        let client = config::http_client();
+        let response = client
+            .get(&url)
+            .timeout(Duration::from_secs(60))
+            .send()
             .await
             .context(format!("Failed to download {url}"))?
+            .error_for_status()
+            .context(format!("Hidden test download returned error status: {url}"))?;
+
+        if let Some(len) = response.content_length()
+            && len as usize > MAX_HIDDEN_TEST_BYTES
+        {
+            anyhow::bail!(
+                "Hidden test download exceeds allowed size ({} bytes > {} bytes)",
+                len,
+                MAX_HIDDEN_TEST_BYTES
+            );
+        }
+
+        let test_source = response
             .bytes()
             .await
             .context(format!("Failed to get response as bytes: {url}"))?;
+
+        if test_source.len() > MAX_HIDDEN_TEST_BYTES {
+            anyhow::bail!(
+                "Hidden test download exceeds allowed size ({} bytes > {} bytes)",
+                test_source.len(),
+                MAX_HIDDEN_TEST_BYTES
+            );
+        }
 
         let root_paths = ProjectPaths::default();
         let path = root_paths
             .root_dir()
             .join(format!("{test_class_name}.java"));
-        async_fs::write(&path, &test_source)
-            .await
-            .context("Failed to write hidden test source")?;
+        let tmp_path = path.with_extension("java.download");
+
+        let write_outcome = async {
+            async_fs::write(&tmp_path, &test_source)
+                .await
+                .context("Failed to write hidden test source")?;
+            // On Windows, rename fails if the destination exists; remove any stale file
+            // first.
+            let _ = async_fs::remove_file(&path).await;
+            async_fs::rename(&tmp_path, &path)
+                .await
+                .context("Failed to move hidden test into place")
+        }
+        .await;
+
+        if let Err(err) = write_outcome {
+            let _ = async_fs::remove_file(&tmp_path).await;
+            return Err(err);
+        }
 
         let project = match Project::new() {
             Ok(a) => a,
             Err(e) => {
                 let _ = async_fs::remove_file(&path).await;
+                let _ = async_fs::remove_file(&tmp_path).await;
                 return Err(e);
             }
         };
@@ -916,6 +985,7 @@ impl ByHiddenTestGrader {
             Ok(o) => o,
             Err(e) => {
                 let _ = async_fs::remove_file(&path).await;
+                let _ = async_fs::remove_file(&tmp_path).await;
                 return Err(e);
             }
         };
@@ -923,6 +993,7 @@ impl ByHiddenTestGrader {
         async_fs::remove_file(&path)
             .await
             .context("Failed to remove hidden test source")?;
+        let _ = async_fs::remove_file(&tmp_path).await;
         Ok(out)
     }
 }

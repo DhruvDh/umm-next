@@ -789,6 +789,8 @@ impl File {
             .iter()
             .map(|s| format!("--select-method={s}"))
             .collect();
+        // TODO: Need to understand the right fallback when no selectors exist;
+        // scan-class-path may be too broad.
 
         let args = self
             .junit_args(&selectors)
@@ -837,6 +839,10 @@ impl File {
                 } else {
                     new_output.push(normalize_stacktrace_line(line));
                 }
+            }
+
+            if let Some(proj) = project {
+                diags.retain(|diag| proj.identify(diag.file_name()).is_ok());
             }
 
             Err(JavaFileError::FailedTests {

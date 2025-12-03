@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use anyhow::{Context, Result};
-use async_openai::types::ChatCompletionRequestMessage;
+use async_openai::types::chat::ChatCompletionRequestMessage;
 use tabled::Tabled;
 
 #[derive(Clone, Default)]

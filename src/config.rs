@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use async_openai::types::ReasoningEffort;
+use async_openai::types::chat::ReasoningEffort;
 use postgrest::Postgrest;
 use reqwest::Client;
 use state::InitCell;
@@ -145,6 +145,7 @@ impl Clone for OpenAiEnv {
             ReasoningEffort::Medium => ReasoningEffort::Medium,
             ReasoningEffort::High => ReasoningEffort::High,
             ReasoningEffort::Minimal => ReasoningEffort::Minimal,
+            ReasoningEffort::None => ReasoningEffort::None,
         };
 
         Self {
@@ -455,22 +456,6 @@ pub fn ensure_initialized() -> Result<ConfigHandle> {
 /// Returns the active configuration, initializing it on demand.
 pub fn get() -> ConfigHandle {
     ensure_initialized().expect("configuration initialization failed")
-}
-
-#[cfg(test)]
-/// Overrides the global configuration for tests.
-pub fn set_for_tests(cfg: ConfigState) {
-    let slot = slot();
-    let mut guard = slot.lock().expect("config slot poisoned");
-    *guard = Some(Arc::new(cfg));
-}
-
-#[cfg(test)]
-/// Resets the global configuration so the next access re-initializes it.
-pub fn reset_for_tests() {
-    let slot = slot();
-    let mut guard = slot.lock().expect("config slot poisoned");
-    guard.take();
 }
 
 /// Returns the configured PostgREST client, if Supabase has been configured.

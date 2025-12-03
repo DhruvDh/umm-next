@@ -18,6 +18,8 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
   design towards the planned Rune integration.
 - For linting/tests: run `cargo fmt` and `cargo clippy --all-targets` before you
   hand back work. Use `cargo check` as needed, but clippy is the minimum bar.
+- Keep Rust test-only logic under `tests/` (integration tests); avoid new
+  `#[cfg(test)]` blocks inside `src/` unless absolutely required.
 - Keep `context.md` untracked (Git ignores it) and update it whenever you make
   structural/code-architecture changes.
 - When the work naturally splits into a commit, suggest or create a concise,

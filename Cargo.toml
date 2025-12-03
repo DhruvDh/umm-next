@@ -25,7 +25,7 @@ serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "1.0.111"
 tabled = "0.20.0"
 self_update = { version = "0.42.0", features = ["rustls"] }
-typed-builder = "0.22.0"
+typed-builder = "0.23.2"
 postgrest = "1.6.0"
 reqwest = { version = "0.12.3", features = ["json", "rustls-tls", "blocking"] }
 tokio = { version = "1.35.1", features = ["full"] }
@@ -33,7 +33,7 @@ futures = "0.3.29"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 dotenvy = "0.15.7"
-async-openai = { git = "https://github.com/64bit/async-openai", branch = "main" }
+async-openai = { version = "0.31.1", features = ["chat-completion"] }
 uuid = { version = "1.7.0", features = ["std", "v4"] }
 snailquote = "0.3.1"
 similar = { version = "2.4.0", features = [
