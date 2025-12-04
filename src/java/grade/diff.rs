@@ -1,8 +1,12 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use anyhow::{Context, Result, ensure};
 use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
 };
+use bon::Builder;
 use owo_colors::OwoColorize;
 use similar::{Algorithm, ChangeTag, utils::diff_unicode_words};
 
@@ -137,111 +141,61 @@ impl DiffCase {
         self
     }
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Builder)]
+#[builder(on(String, into))]
 /// string. Any difference results in a `0` grade.
 /// A grader that grades by diffing an `expected` string with an `actual`
 pub struct DiffGrader {
     /// name of requirement
+    #[builder(getter)]
     pub req_name:            String,
     /// points to give if all tests pass
+    #[builder(getter)]
     pub out_of:              f64,
     /// the project to grade
+    #[builder(getter)]
     pub project:             Project,
     /// Java file to run
+    #[builder(getter)]
     pub file:                String,
     /// Diff cases pairing optional stdin with expected output.
+    #[builder(
+        default,
+        with = |iter: impl IntoIterator<
+            Item = (impl Into<String>, Option<impl Into<String>>)
+        >| iter
+            .into_iter()
+            .map(|(expected, input)| DiffCase {
+                expected: expected.into(),
+                input:    input.map(Into::into),
+            })
+            .collect::<Vec<_>>()
+    )]
+    #[builder(getter)]
     pub cases:               Vec<DiffCase>,
     /// ignore case when comparing
+    #[builder(default)]
+    #[builder(getter)]
     pub ignore_case:         bool,
     /// preserve whitespace when comparing
+    #[builder(default)]
+    #[builder(getter)]
     pub preserve_whitespace: bool,
 }
 
 impl DiffGrader {
-    /// creates a new DiffGrader
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// gets the `req_name` field
-    pub fn req_name(&self) -> String {
-        self.req_name.clone()
-    }
-
-    /// sets the `req_name` field
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
+    /// Adds a single diff case after construction.
+    pub fn case(mut self, expected: impl Into<String>, input: Option<impl Into<String>>) -> Self {
+        self.cases.push(DiffCase {
+            expected: expected.into(),
+            input:    input.map(Into::into),
+        });
         self
     }
 
-    /// gets the `out_of` field
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// sets the `out_of` field
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// Returns the configured diff cases.
-    pub fn cases(&self) -> &[DiffCase] {
-        self.cases.as_ref()
-    }
-
-    /// Replaces diff cases with the provided collection.
-    pub fn set_cases<I>(mut self, cases: I) -> Self
-    where
-        I: Into<Vec<DiffCase>>,
-    {
-        self.cases = cases.into();
-        self
-    }
-
-    /// Appends a diff case to the grader configuration.
-    pub fn add_case(mut self, case: DiffCase) -> Self {
-        self.cases.push(case);
-        self
-    }
-
-    /// gets the `project` field
-    pub fn project(&self) -> Project {
-        self.project.clone()
-    }
-
-    /// sets the `project` field
-    pub fn set_project(mut self, project: Project) -> Self {
-        self.project = project;
-        self
-    }
-
-    /// gets the `file` field
-    pub fn file(&self) -> String {
-        self.file.clone()
-    }
-
-    /// sets the `file` field
-    pub fn set_file(mut self, file: String) -> Self {
-        self.file = file;
-        self
-    }
-
-    /// gets the `ignore_case` field
-    pub fn ignore_case(&self) -> bool {
-        self.ignore_case
-    }
-
-    /// sets the `ignore_case` field
-    pub fn set_ignore_case(mut self, ignore_case: bool) -> Self {
-        self.ignore_case = ignore_case;
-        self
-    }
-
-    /// sets the `preserve_whitespace` field
-    pub fn set_preserve_whitespace(mut self, preserve_whitespace: bool) -> Self {
-        self.preserve_whitespace = preserve_whitespace;
-        self
+    /// Builds and runs the configured diff grader.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.grade_by_diff().await
     }
 
     /// Grades by diffing the `expected` and `actual` strings.
@@ -289,15 +243,12 @@ impl DiffGrader {
             }
         }
 
-        Ok(GradeResult {
-            requirement: self.req_name.clone(),
-            grade:       Grade {
-                grade:  self.out_of,
-                out_of: self.out_of,
-            },
-            reason:      "Got expected output".to_string(),
-            prompt:      None,
-        })
+        Ok(GradeResult::builder()
+            .requirement(self.req_name.clone())
+            .grade(Grade::new(self.out_of, self.out_of))
+            .reason("Got expected output")
+            .maybe_prompt(None)
+            .build())
     }
 
     /// Builds a failing `GradeResult` with the supplied reason and prompt
@@ -307,12 +258,12 @@ impl DiffGrader {
         reason: impl Into<String>,
         messages: Vec<ChatCompletionRequestMessage>,
     ) -> GradeResult {
-        GradeResult {
-            requirement: self.req_name.clone(),
-            grade:       Grade::new(0.0, self.out_of),
-            reason:      reason.into(),
-            prompt:      Some(messages),
-        }
+        GradeResult::builder()
+            .requirement(self.req_name.clone())
+            .grade(Grade::new(0.0, self.out_of))
+            .reason(reason.into())
+            .maybe_prompt(Some(messages))
+            .build()
     }
 
     /// Renders the instructor/student messages used when diff grading fails.
@@ -538,11 +489,21 @@ impl DiffGrader {
             .context("Failed to build user message")?
             .into();
 
-        Ok(GradeResult {
-            requirement: self.req_name.clone(),
-            grade:       Grade::new(0.0, self.out_of),
-            reason:      failure.reason,
-            prompt:      Some(vec![system_message, user_message, retrieval_message]),
-        })
+        Ok(GradeResult::builder()
+            .requirement(self.req_name.clone())
+            .grade(Grade::new(0.0, self.out_of))
+            .reason(failure.reason)
+            .maybe_prompt(Some(vec![system_message, user_message, retrieval_message]))
+            .build())
+    }
+}
+
+impl<S> DiffGraderBuilder<S>
+where
+    S: diff_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.build().run().await
     }
 }

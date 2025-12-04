@@ -24,7 +24,7 @@ pub use context::{build_active_retrieval_context, build_heuristic_context, get_s
 pub use diagnostics::{
     DiagnosticSeverity, JavacDiagnostic, MutationDiagnostic, MutationTestResult,
 };
-pub use diff::DiffGrader;
+pub use diff::{DiffCase, DiffGrader};
 pub use docs::DocsGrader;
 pub use feedback::{PromptRow, generate_feedback};
 pub use gradescope::{

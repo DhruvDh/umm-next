@@ -1,10 +1,10 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
 //! # umm
 //!
 //! A scriptable build tool/grader/test runner for Java projects that don't use
 //! package managers.
 
-#![warn(missing_docs)]
-#![warn(clippy::missing_docs_in_private_items)]
 #![feature(iterator_try_collect)]
 #![feature(stmt_expr_attributes)]
 #![feature(iter_collect_into)]

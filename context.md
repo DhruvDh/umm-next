@@ -1,12 +1,13 @@
 # Repository Context And Migration Notes
 
-> **Status — Updated 2025-12-03**
+> **Status — Updated 2025-12-04**
 >
-> - **CLI `grade`:** Executes Rune scripts on **main** (pass a `.rn` path). The embedded Python prototype exists **only** on the `try-python-scripting` branch and remains under evaluation.
+> - **CLI `grade`:** Runs Rune scripts via `scripting::run_file`, but **no `umm` bindings are registered**; scripts currently get only Rune’s std modules.
 > - **Scripting:** **Decision pending.** Python bindings (embedded runtime) are under trial on `try-python-scripting`. Rune design notes are retained **as deferred reference** until a decision is made.
 > - **Rhai:** Entry flow removed; residual types compile but are inert without the Rhai entrypoint.
 > - **Module layout:** Java sources live under `src/java/*`; configuration and prompts live in `src/config.rs`; `src/constants.rs` is intentionally empty.
 > - **Active retrieval toggle:** Managed with an `std::sync::atomic::AtomicBool` stored in `config::ConfigState`.
+> - **Builders:** `bon 3.8` replaced the remaining `typed-builder` surfaces across graders/DTOs; builder getters enabled for inspection; list setters accept iterables via custom `with` closures; overwrite remains disallowed.
 
 ## Table of Contents
 
@@ -131,6 +132,7 @@
 - Switched Supabase and OpenAI usage to lazy initialization so commands that do not need them run without credentials.
 - Improved grader feedback rendering: penalties print inline and degrade gracefully when external services are unavailable.
 - Hardened file/runtime ergonomics post-Rhai removal, including accurate `FileType` classification and safer snippet rendering helpers.
+- Migrated all graders/Gradescope/diagnostic DTOs to `bon` builders (3.8.1) with iterable-friendly setters and builder getters; added lightweight integration smoke tests under `tests/bon_builders_smoke.rs`.
 
 ## Module Map (Authoritative)
 
@@ -198,15 +200,10 @@
 
 ## Scripting Strategy (Decision Record)
 
-- **Decision**: Rune is the primary scripting surface on `main`. The CLI executes `.rn` files directly through `scripting::run_file`.
-- **Implementation**:
-  - `Context::with_default_modules()` boots the Rune standard library; `umm::java` registers project helpers and grader builders.
-  - Scripts expose an async `pub fn main() -> Result<(), String>` and compose `DocsGrader`, `ByUnitTestGrader`, and `DiffGrader` builders.
-  - Results are rendered with `show_results`, matching the CLI table output.
-- **Legacy**: The embedded-Python prototype remains on `try-python-scripting` for reference but is no longer authoritative.
-- **Next steps**:
-  - Expose additional graders (hidden tests, mutation) and feedback generators.
-  - Offer query-graders with Rune predicates once filters migrate off Rhai-specific APIs.
+- **Decision (current state)**: `umm grade` executes Rune scripts via `scripting::run_file`, but only Rune std modules are registered; no `umm` bindings are exposed yet. Rune remains a deferred/experimental surface.
+- **Next steps (todo)**:
+  - If we keep Rune, add a `umm` module that registers `Project`, graders, and helpers, then refresh samples/docs.
+  - In parallel, continue evaluating the embedded-Python prototype on `try-python-scripting`.
 
 ## Prompts, Env, and Global Config
 
@@ -226,7 +223,7 @@
 ## Design Rationale & Invariants
 
 - Paths must remain instance-scoped; avoid reintroducing globals.
-- `grade` currently executes Rune scripts on main; keep behavior documented while the long-term scripting story is finalized.
+- `grade` currently executes Rune scripts on main, but scripts only have Rune std modules until we register `umm` bindings.
 - Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
 
 ## Definition of Done (main)
@@ -335,7 +332,7 @@ Recent Cleanups (reference)
 
 1. Config extension: expose mutation hooks on `config` for prompts/client overrides and document usage.
 2. Rhai removal: replace `rhai::Array`/`FnPtr` usage in graders, delete `SCRIPT_AST` once query filtering is redesigned.
-3. Scripting prototype: gate the selected scripting surface (Rune or Python) behind a feature and ship a minimal `grade` flow.
+3. Scripting prototype: decide Rune vs Python; if Rune wins, register `umm` bindings and ship a minimal `grade` flow behind a feature.
 4. Project paths: allow CLI/env overrides for alternate roots and multi-module layouts.
 5. Documentation: update README/docs to describe the path model and scripting status once the prototype stabilizes.
 
@@ -439,6 +436,7 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 ## Doc Change Log
 
+- 2025-12-04: Replaced remaining `typed-builder` usage with `bon` (3.8.1); enabled builder getters, iterable setters, and `bon::vec!` helpers; added smoke tests for builder ergonomics and refreshed README to point Rune users at the bon builder surface.
 - 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
   `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped
   config prompts under a `JavaConfig` bundle (`java_prompts()` accessor retained);

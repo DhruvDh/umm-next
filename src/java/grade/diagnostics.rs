@@ -1,17 +1,19 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{
     fmt::{self, Display},
     path::Path,
 };
 
+use bon::Builder;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use tabled::Tabled;
-use typed_builder::TypedBuilder;
 
 use crate::types::LineRef;
 
-#[derive(Tabled, Serialize, Deserialize, TypedBuilder, Clone, Debug)]
-#[builder(field_defaults(setter(into)))]
-#[builder(doc)]
+#[derive(Tabled, Serialize, Deserialize, Builder, Clone, Debug)]
+#[builder(on(String, into))]
 /// A struct representing a javac diagnostic message
 pub struct JavacDiagnostic {
     /// * `path`: path to the file diagnostic is referring to
@@ -58,13 +60,19 @@ impl From<JavacDiagnostic> for LineRef {
     }
 }
 
-#[derive(Tabled, Serialize, Deserialize, TypedBuilder, Clone)]
-#[builder(field_defaults(setter(into)))]
-#[builder(doc)]
+#[derive(Tabled, Serialize, Deserialize, Builder, Clone)]
+#[builder(on(String, into))]
 /// A struct representing a PIT diagnostic message
 pub struct MutationDiagnostic {
     /// * `mutator`: name of the mutator in question
     #[tabled(rename = "Mutation type")]
+    #[builder(with = |mutator: impl Into<String>| {
+        let mutator = mutator.into();
+        mutator
+            .split_once(".mutators.")
+            .map(|(_, rhs)| rhs.to_string())
+            .unwrap_or(mutator)
+    })]
     mutator:          String,
     /// * `source_method`: name of the source method being mutated
     #[tabled(rename = "Source method mutated")]
@@ -77,6 +85,7 @@ pub struct MutationDiagnostic {
     test_method:      String,
     /// * `result`: result of mutation testing
     #[tabled(rename = "Result")]
+    #[builder(with = |value: impl Into<String>| MutationTestResult::from(value.into()))]
     result:           MutationTestResult,
     /// * `source_file_name`: name of the source file
     #[tabled(skip)]

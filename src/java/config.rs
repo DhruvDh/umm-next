@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::time::Duration;
 
 use crate::retrieval::HeuristicConfig;

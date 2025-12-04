@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{collections::HashSet, fs, io::Write};
 
 use anyhow::{Context, Result, ensure};
@@ -10,6 +13,7 @@ use async_openai::{
         CreateChatCompletionRequest, CreateChatCompletionResponse,
     },
 };
+use bon::Builder;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use tabled::{
@@ -17,7 +21,6 @@ use tabled::{
     settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
 };
 use tokio::{runtime::Runtime, task::block_in_place};
-use typed_builder::TypedBuilder;
 
 use super::{feedback::generate_single_feedback, results::GradeResult};
 use crate::{
@@ -26,28 +29,45 @@ use crate::{
 };
 
 /// Configuration options that control how Gradescope output is rendered.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
+#[builder(on(String, into))]
 pub struct GradescopeConfig {
     /// Source files to include when generating SLO summaries.
+    #[builder(default, with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
     pub source_files:        Vec<String>,
     /// Test files to include when generating SLO summaries.
+    #[builder(default, with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
     pub test_files:          Vec<String>,
     /// Title displayed alongside SLO feedback.
+    #[builder(default)]
     pub project_title:       String,
     /// Description displayed alongside SLO feedback.
+    #[builder(default)]
     pub project_description: String,
     /// Threshold (0.0-1.0) for marking test cases as passing.
+    #[builder(default = 0.7)]
     pub pass_threshold:      f64,
     /// Whether to emit a textual overview table to stderr.
+    #[builder(default = true)]
     pub show_table:          bool,
     /// Whether to emit the Gradescope JSON artifact.
+    #[builder(default)]
     pub results_json:        bool,
     /// Whether to post per-test feedback via Supabase.
+    #[builder(default)]
     pub feedback:            bool,
     /// Whether to write the Gradescope JSON to the local workspace for
     /// debugging.
+    #[builder(default)]
     pub debug:               bool,
     /// Set of enabled SLO identifiers that should generate feedback.
+    #[builder(default, with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<HashSet<String>>()
+    })]
     pub enabled_slos:        HashSet<String>,
 }
 
@@ -110,118 +130,143 @@ pub enum GradescopeStatus {
 }
 
 /// Represents the overall submission data.
-#[derive(Serialize, Deserialize, Debug, TypedBuilder)]
-#[builder(field_defaults(default, setter(into)))]
-#[builder(doc)]
+#[derive(Serialize, Deserialize, Debug, Builder)]
+#[builder(on(String, into))]
 pub struct GradescopeSubmission {
     /// Optional overall score. Overrides total of test cases if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub score: Option<f64>,
 
     /// Optional execution time in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub execution_time: Option<u32>,
 
     /// Optional text relevant to the entire submission.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub output: Option<String>,
 
     /// Optional output format settings.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub output_format: Option<GradescopeOutputFormat>,
 
     /// Optional default output format for test case outputs.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub test_output_format: Option<GradescopeOutputFormat>,
 
     /// Optional default output format for test case names.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub test_name_format: Option<GradescopeOutputFormat>,
 
     /// Optional visibility setting.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub visibility: Option<GradescopeVisibility>,
 
     /// Optional stdout visibility setting.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub stdout_visibility: Option<GradescopeVisibility>,
 
     /// Optional extra data to be stored.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub extra_data: Option<serde_json::Value>,
 
     /// Optional test cases.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
+    #[builder(with = FromIterator::from_iter)]
     pub tests: Option<Vec<GradescopeTestCase>>,
 
     /// Optional leaderboard setup.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
+    #[builder(with = FromIterator::from_iter)]
     pub leaderboard: Option<Vec<GradescopeLeaderboardEntry>>,
 }
 
 /// Represents an individual test case.
-#[derive(Serialize, Deserialize, Debug, TypedBuilder)]
-#[builder(field_defaults(default, setter(into)))]
-#[builder(doc)]
+#[derive(Serialize, Deserialize, Debug, Builder)]
+#[builder(on(String, into))]
 pub struct GradescopeTestCase {
     /// Optional score for the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub score: Option<f64>,
 
     /// Optional maximum score for the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub max_score: Option<f64>,
 
     /// Optional status of the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub status: Option<GradescopeStatus>,
 
     /// Optional name of the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub name: Option<String>,
 
     /// Optional formatting for the test case name.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub name_format: Option<GradescopeOutputFormat>,
 
     /// Optional number for the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub number: Option<String>,
 
     /// Optional detailed output for the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub output: Option<String>,
 
     /// Optional formatting for the test case output.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub output_format: Option<GradescopeOutputFormat>,
 
     /// Optional tags associated with the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
+    #[builder(with = FromIterator::from_iter)]
     pub tags: Option<Vec<String>>,
 
     /// Optional visibility setting for the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub visibility: Option<GradescopeVisibility>,
 
     /// Optional extra data to be stored with the test case.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub extra_data: Option<serde_json::Value>,
 }
 
 /// Represents an entry in the leaderboard.
-#[derive(Serialize, Deserialize, Debug, TypedBuilder)]
-#[builder(field_defaults(default, setter(into)))]
-#[builder(doc)]
+#[derive(Serialize, Deserialize, Debug, Builder)]
+#[builder(on(String, into))]
 pub struct GradescopeLeaderboardEntry {
     /// Name of the leaderboard metric.
+    #[builder(getter)]
     pub name: String,
 
     /// Value of the leaderboard metric.
+    #[builder(getter)]
     pub value: String,
 
     /// Optional ordering for the leaderboard metric.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(getter)]
     pub order: Option<String>,
 }
 
@@ -477,18 +522,16 @@ async fn generate_slo_responses(
 /// * `results`: collection of requirement-level grades to render.
 /// * `config`: strongly typed configuration that replaces the legacy Rhai map.
 pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Result<()> {
-    let GradescopeConfig {
-        source_files,
-        test_files,
-        project_title,
-        project_description,
-        pass_threshold,
-        show_table,
-        results_json: gradescope_json,
-        feedback: gradescope_feedback,
-        debug: gradescope_debug,
-        enabled_slos,
-    } = config;
+    let show_table = config.show_table;
+    let gradescope_json = config.results_json;
+    let gradescope_feedback = config.feedback;
+    let gradescope_debug = config.debug;
+    let pass_threshold = config.pass_threshold;
+    let source_files = config.source_files.clone();
+    let test_files = config.test_files.clone();
+    let project_title = config.project_title.clone();
+    let project_description = config.project_description.clone();
+    let enabled_slos = config.enabled_slos.clone();
 
     let (grade, out_of) = results
         .iter()
@@ -526,11 +569,11 @@ pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Resul
             };
 
             let test_case = GradescopeTestCase::builder()
-                .name(result.requirement())
+                .name(result.requirement.clone())
                 .name_format(GradescopeOutputFormat::Text)
-                .max_score(result.out_of())
-                .score(result.grade())
-                .status(if result.grade() > pass_threshold * result.out_of() {
+                .max_score(result.out_of_value())
+                .score(result.grade_value())
+                .status(if result.grade_value() > pass_threshold * result.out_of_value() {
                     GradescopeStatus::Passed
                 } else {
                     GradescopeStatus::Failed
@@ -614,7 +657,7 @@ pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Resul
             );
         }
         let submission = GradescopeSubmission::builder()
-            .tests(Some(test_cases))
+            .tests(test_cases)
             .test_output_format(GradescopeOutputFormat::Md)
             .test_name_format(GradescopeOutputFormat::Text)
             .stdout_visibility(GradescopeVisibility::Visible)

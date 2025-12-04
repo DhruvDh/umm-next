@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{collections::HashSet, ffi::OsString, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
@@ -5,6 +8,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
 };
+use bon::Builder;
 use tabled::tables::ExtendedTable;
 use tokio::fs as async_fs;
 
@@ -45,94 +49,38 @@ struct MutationInputs {
     /// Classes whose calls should be avoided during mutation.
     avoid_calls_to:   Vec<String>,
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Builder)]
+#[builder(on(String, into))]
 /// Grades by running tests, and reports how many tests pass.
 /// Final grade is the same percentage of maximum grade as the number of tests
 /// passing.
 pub struct ByUnitTestGrader {
     /// A list of test files to run.
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     test_files:     Vec<String>,
     /// A list of test names that should be found. Grade returned is 0 if any
     /// are not found.
+    #[builder(default)]
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     expected_tests: Vec<String>,
     /// A reference to the project the test files belong to.
+    #[builder(getter)]
     project:        Project,
     /// Maximum possible grade.
+    #[builder(getter)]
     out_of:         f64,
     /// Display name for requirement to use while displaying grade result
+    #[builder(getter)]
     req_name:       String,
 }
 
 impl ByUnitTestGrader {
-    /// Getter for test_files
-    pub fn test_files(&self) -> &[String] {
-        &self.test_files
-    }
-
-    /// Setter for test_files
-    pub fn set_test_files<I>(mut self, test_files: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.test_files = test_files
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
-    /// Getter for expected_tests
-    pub fn expected_tests(&self) -> &[String] {
-        &self.expected_tests
-    }
-
-    /// Setter for expected_tests
-    pub fn set_expected_tests<I>(mut self, expected_tests: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.expected_tests = expected_tests
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
-    /// Getter for project
-    pub fn project(&self) -> Project {
-        self.project.clone()
-    }
-
-    /// Setter for project
-    pub fn set_project(mut self, project: Project) -> Self {
-        self.project = project;
-        self
-    }
-
-    /// Getter for out_of
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// Setter for out_of
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// Getter for req_name
-    pub fn req_name(&self) -> String {
-        self.req_name.clone()
-    }
-
-    /// Setter for req_name
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
-        self
-    }
-
     /// Grades by running tests, and reports how many tests pass.
     /// Final grade is the same percentage of maximum grade as the number of
     /// tests passing.
@@ -160,12 +108,12 @@ impl ByUnitTestGrader {
             let user_message = Self::build_user_message(reasons_body.clone())
                 .context("Failed to build expected-test failure message")?;
 
-            return Ok(GradeResult {
-                requirement: req_name,
-                grade:       Grade::new(0.0, out_of),
-                reason:      reasons_body,
-                prompt:      Some(vec![system_message, user_message]),
-            });
+            return Ok(GradeResult::builder()
+                .requirement(req_name)
+                .grade(Grade::new(0.0, out_of))
+                .reason(reasons_body)
+                .maybe_prompt(Some(vec![system_message, user_message]))
+                .build());
         }
 
         let mut total_passed = 0.0;
@@ -187,12 +135,12 @@ impl ByUnitTestGrader {
             0.0
         };
 
-        Ok(GradeResult {
-            requirement: req_name,
-            grade:       Grade::new(grade_value, out_of),
-            reason:      format!("- {total_passed}/{total_tests} tests passing."),
-            prompt:      Some(messages),
-        })
+        Ok(GradeResult::builder()
+            .requirement(req_name)
+            .grade(Grade::new(grade_value, out_of))
+            .reason(format!("- {total_passed}/{total_tests} tests passing."))
+            .maybe_prompt(Some(messages))
+            .build())
     }
 
     /// Resolves string-based test file names into `File` handles.
@@ -467,124 +415,68 @@ impl ByUnitTestGrader {
     }
 }
 
-#[derive(Clone, Default)]
+impl ByUnitTestGrader {
+    /// Builds and runs the unit-test grader.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.grade_by_tests().await
+    }
+}
+
+impl<S> ByUnitTestGraderBuilder<S>
+where
+    S: by_unit_test_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.build().run().await
+    }
+}
+
+#[derive(Clone, Default, Builder)]
+#[builder(on(String, into))]
 /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
 pub struct UnitTestGrader {
     /// Name of the requirement.
+    #[builder(getter)]
     pub req_name:         String,
     /// Maximum possible grade.
+    #[builder(getter)]
     pub out_of:           f64,
     /// List of test classes to run.
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     pub target_test:      Vec<String>,
     /// List of classes to mutate.
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     pub target_class:     Vec<String>,
     /// List of methods to exclude from mutation.
+    #[builder(default)]
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     pub excluded_methods: Vec<String>,
     /// List of classes to avoid mutating.
+    #[builder(default)]
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     pub avoid_calls_to:   Vec<String>,
 }
 
 impl UnitTestGrader {
-    /// A getter for the name of the requirement.
-    pub fn get_req_name(&self) -> String {
-        self.req_name.clone()
-    }
-
-    /// A getter for the maximum possible grade.
-    pub fn get_out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// A getter for the list of test classes to run.
-    pub fn get_target_test(&self) -> &[String] {
-        &self.target_test
-    }
-
-    /// A getter for the list of classes to mutate.
-    pub fn get_target_class(&self) -> &[String] {
-        &self.target_class
-    }
-
-    /// A getter for the list of methods to exclude from mutation.
-    pub fn get_excluded_methods(&self) -> &[String] {
-        &self.excluded_methods
-    }
-
-    /// A getter for the list of classes to avoid mutating.
-    pub fn get_avoid_calls_to(&self) -> &[String] {
-        &self.avoid_calls_to
-    }
-
-    /// A setter for the name of the requirement.
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
-        self
-    }
-
-    /// A setter for the maximum possible grade.
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// A setter for the list of test classes to run.
-    pub fn set_target_test<I>(mut self, target_test: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.target_test = target_test
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
-    /// A setter for the list of classes to mutate.
-    pub fn set_target_class<I>(mut self, target_class: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.target_class = target_class
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
-    /// A setter for the list of methods to exclude from mutation.
-    pub fn set_excluded_methods<I>(mut self, excluded_methods: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.excluded_methods = excluded_methods
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
-    /// A setter for the list of classes to avoid mutating.
-    pub fn set_avoid_calls_to<I>(mut self, avoid_calls_to: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        self.avoid_calls_to = avoid_calls_to
-            .into_iter()
-            .map(|item| item.as_ref().to_owned())
-            .collect();
-        self
-    }
-
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
     pub async fn grade_unit_tests(&self) -> Result<GradeResult> {
         eprintln!("Running Mutation tests -");
 
-        let req_name = self.get_req_name();
-        let out_of = self.get_out_of();
+        let req_name = self.req_name.clone();
+        let out_of = self.out_of;
         let inputs = self
             .normalize_inputs()
             .context("Failed to interpret mutation grader configuration")?;
@@ -695,12 +587,12 @@ impl UnitTestGrader {
 
         let grade_value = (out_of - penalty).max(0.0);
 
-        Ok(GradeResult {
-            requirement: req_name,
-            grade: Grade::new(grade_value, out_of),
-            reason: format!("-{penalty:.0} Penalty due to surviving mutations"),
-            prompt,
-        })
+        Ok(GradeResult::builder()
+            .requirement(req_name)
+            .grade(Grade::new(grade_value, out_of))
+            .reason(format!("-{penalty:.0} Penalty due to surviving mutations"))
+            .maybe_prompt(prompt)
+            .build())
     }
 
     /// Processes a failed PIT run by capturing stderr/stdout into prompts.
@@ -728,12 +620,12 @@ impl UnitTestGrader {
         let prompt = Self::build_mutation_failure_prompt(prompts, &inputs, output)
             .context("Failed to build mutation failure prompt")?;
 
-        Ok(GradeResult {
-            requirement: req_name,
-            grade: Grade::new(0.0, out_of),
-            reason: String::from("Something went wrong while running mutation tests, skipping."),
-            prompt,
-        })
+        Ok(GradeResult::builder()
+            .requirement(req_name)
+            .grade(Grade::new(0.0, out_of))
+            .reason("Something went wrong while running mutation tests, skipping.")
+            .maybe_prompt(prompt)
+            .build())
     }
 
     /// Loads the mutation CSV report and extracts surviving mutations.
@@ -838,74 +730,52 @@ impl UnitTestGrader {
     }
 }
 
-#[derive(Clone, Default)]
+impl UnitTestGrader {
+    /// Builds and runs the mutation grader.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.grade_unit_tests().await
+    }
+}
+
+impl<S> UnitTestGraderBuilder<S>
+where
+    S: unit_test_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.build().run().await
+    }
+}
+
+#[derive(Clone, Default, Builder)]
+#[builder(on(String, into))]
 /// Grades using hidden tests. Test file is downloaded, ran, and then cleaned up
 /// before returning.
 pub struct ByHiddenTestGrader {
     /// URL to download test source from.
+    #[builder(getter)]
     pub url:             String,
     /// name of hidden test class.
+    #[builder(getter)]
     pub test_class_name: String,
     /// points to give if all tests pass.
+    #[builder(getter)]
     pub out_of:          f64,
     /// name of requirement.
+    #[builder(getter)]
     pub req_name:        String,
 }
 
 impl ByHiddenTestGrader {
-    /// gets the `url` field.
-    pub fn url(&self) -> String {
-        self.url.clone()
-    }
-
-    /// sets the `url` field.
-    pub fn set_url(mut self, url: String) -> Self {
-        self.url = url;
-        self
-    }
-
-    /// gets the `test_class_name` field
-    pub fn test_class_name(&self) -> String {
-        self.test_class_name.clone()
-    }
-
-    /// sets the `test_class_name` field
-    pub fn set_test_class_name(mut self, test_class_name: String) -> Self {
-        self.test_class_name = test_class_name;
-        self
-    }
-
-    /// gets the `out_of` field
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// sets the `out_of` field
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// gets the `req_name` field
-    pub fn req_name(&self) -> String {
-        self.req_name.clone()
-    }
-
-    /// sets the `req_name` field
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
-        self
-    }
-
     /// Grades using hidden tests. Test file is downloaded, ran, and then
     /// cleaned up before returning.
     pub async fn grade_by_hidden_tests(&self) -> Result<GradeResult> {
         const MAX_HIDDEN_TEST_BYTES: usize = 5 * 1024 * 1024;
 
-        let url = self.url();
-        let test_class_name = self.test_class_name();
-        let out_of = self.out_of();
-        let req_name = self.req_name();
+        let url = self.url.clone();
+        let test_class_name = self.test_class_name.clone();
+        let out_of = self.out_of;
+        let req_name = self.req_name.clone();
 
         let client = config::http_client();
         let response = client
@@ -995,5 +865,22 @@ impl ByHiddenTestGrader {
             .context("Failed to remove hidden test source")?;
         let _ = async_fs::remove_file(&tmp_path).await;
         Ok(out)
+    }
+}
+
+impl ByHiddenTestGrader {
+    /// Builds and runs the hidden-test grader.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.grade_by_hidden_tests().await
+    }
+}
+
+impl<S> ByHiddenTestGraderBuilder<S>
+where
+    S: by_hidden_test_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.build().run().await
     }
 }

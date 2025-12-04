@@ -1,7 +1,11 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::fs;
 
 use anyhow::{Context, Result, anyhow};
 use async_openai::types::chat::ChatCompletionRequestMessage;
+use bon::{Builder, vec};
 use serde::Serialize;
 use serde_json;
 use tokio::{runtime::Runtime, task::block_in_place};
@@ -10,20 +14,21 @@ use uuid::Uuid;
 use super::results::GradeResult;
 use crate::config;
 /// Schema for `prompts` table
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Builder)]
+#[builder(on(String, into))]
 pub struct PromptRow {
     /// UUID of data entry
-    id:               String,
+    pub(crate) id:               String,
     /// ChatGPT message prompt
-    messages:         Option<Vec<ChatCompletionRequestMessage>>,
+    pub(crate) messages:         Option<Vec<ChatCompletionRequestMessage>>,
     /// Name of the autograder requirement
-    requirement_name: String,
+    pub(crate) requirement_name: String,
     /// Reasons for penalty
-    reason:           String,
+    pub(crate) reason:           String,
     /// Grade/out_of as a string
-    grade:            String,
+    pub(crate) grade:            String,
     /// Status of prompt response generation - not_started, started, completed
-    status:           String,
+    pub(crate) status:           String,
 }
 
 /// Generates feedback for a single `GradeResult` and posts it to the database.
@@ -37,14 +42,14 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         })?;
         let id = Uuid::new_v4().to_string();
         let result = result.clone();
-        let body = PromptRow {
-            id:               id.clone(),
-            messages:         result.prompt(),
-            requirement_name: result.requirement(),
-            reason:           result.reason(),
-            grade:            result.grade_struct().to_string(),
-            status:           "not_started".into(),
-        };
+        let body = PromptRow::builder()
+            .id(id.clone())
+            .maybe_messages(result.prompt.clone())
+            .requirement_name(result.requirement.clone())
+            .reason(result.reason.clone())
+            .grade(result.grade_struct().to_string())
+            .status("not_started")
+            .build();
 
         let messages = serde_json::to_string(&body)?;
 
@@ -61,7 +66,7 @@ pub(crate) fn generate_single_feedback(result: &GradeResult) -> Result<String> {
         Ok(format!(
             "- For explanation and feedback on `{}` (refer rubric), please \
              see this link - https://feedback.dhruvdh.com/{}",
-            result.requirement(),
+            result.requirement.clone(),
             id
         ))
     } else {
@@ -77,7 +82,7 @@ pub fn generate_feedback<I>(results: I) -> Result<()>
 where
     I: IntoIterator<Item = GradeResult>,
 {
-    let mut feedback = vec!["## Understanding Your Autograder Results\n".to_string()];
+    let mut feedback = vec!["## Understanding Your Autograder Results\n"];
 
     for result in results.into_iter() {
         let fb = generate_single_feedback(&result)?;

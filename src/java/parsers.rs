@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use crate::java::grade::{JavacDiagnostic, LineRef, MutationDiagnostic};
 
 peg::parser! {
@@ -102,7 +105,7 @@ peg::parser! {
             JavacDiagnostic::builder()
                 .path(display_path)
                 .file_name(name)
-                .severity(d)
+                .severity(d.into())
                 .line_number(l)
                 .message(if d { format!("Error: {m}") } else { m })
                 .build()
@@ -162,15 +165,9 @@ peg::parser! {
                     }
                 }
 
-                let mutator = mutation
-                    .to_string()
-                    .split_once(".mutators.")
-                    .map(|(_, r)| r.to_string())
-                    .unwrap_or_else(|| mutation.to_string());
-
                 MutationDiagnostic::builder()
                     .line_number(line_no)
-                    .mutator(mutator)
+                    .mutator(mutation)
                     .source_file_name(source_file_name)
                     .source_method(source_method)
                     .test_file_name(test_file_name)

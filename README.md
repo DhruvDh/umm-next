@@ -31,7 +31,7 @@ Once you are done, just type `cargo install --git=https://github.com/DhruvDh/umm
 
 `umm` now runs grading flows written in [Rune](https://rune-rs.github.io/). Ship a script with an async `main` function and execute it with `umm java grade path/to/script.rn`. A minimal example lives in `examples/sample.rn`.
 
-The notes below document the legacy Rhai prototype and will be updated as the Rune API settles.
+The Rune surface now leans on the [`bon`](https://docs.rs/bon) builders exposed from the Rust graders (e.g., `DocsGrader::builder().project(...).files([...]).run().await?`). See `examples/sample.rn` for the canonical shape. The notes below document the legacy Rhai prototype and will be updated as the Rune API settles. **We do not currently register additional Rust helper functions into Rune beyond the graders’ builder surfaces.**
 
 ### Introduction
 

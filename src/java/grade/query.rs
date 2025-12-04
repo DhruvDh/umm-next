@@ -1,7 +1,11 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{fmt, sync::Arc};
 
 use anyhow::{Context, Result};
 use async_openai::types::chat::ChatCompletionRequestSystemMessageArgs;
+use bon::Builder;
 use snailquote::unescape;
 
 use super::results::{Grade, GradeResult};
@@ -128,114 +132,38 @@ pub enum QueryConstraint {
     MustNotMatch,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Builder)]
+#[builder(on(String, into))]
 /// A struct to represent a query grader.
 pub struct QueryGrader {
     /// The name of the requirement.
+    #[builder(getter)]
     req_name:   String,
     /// The grade for the requirement.
+    #[builder(getter)]
     out_of:     f64,
     /// The queries to run.
+    #[builder(default)]
+    #[builder(with = FromIterator::from_iter)]
+    #[builder(getter)]
     queries:    Vec<Query>,
     /// The input to run the queries on.
+    #[builder(getter)]
     project:    Project,
     /// The file to run the query on.
+    #[builder(getter)]
     file:       String,
     /// The constraint of the query.
+    #[builder(default)]
+    #[builder(getter)]
     constraint: QueryConstraint,
     /// The reason to share with the student.
+    #[builder(default)]
+    #[builder(getter)]
     reason:     String,
 }
 
 impl QueryGrader {
-    /// Creates a new query grader with default values.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Gets the name of the requirement.
-    pub fn req_name(&self) -> &str {
-        &self.req_name
-    }
-
-    /// Sets the name of the requirement.
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
-        self
-    }
-
-    /// Gets the "out of" grade for the requirement.
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// Sets the "out of" grade for the requirement.
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// Gets the file to run the query on.
-    pub fn file(&self) -> &str {
-        &self.file
-    }
-
-    /// Sets the file to run the query on.
-    pub fn set_file(mut self, file: String) -> Self {
-        self.file = file;
-        self
-    }
-
-    /// Gets the project to run the query on.
-    pub fn project(&self) -> &Project {
-        &self.project
-    }
-
-    /// Sets the project to run the query on.
-    pub fn set_project(mut self, project: Project) -> Self {
-        self.project = project;
-        self
-    }
-
-    /// Gets the queries to run.
-    pub fn queries(&self) -> Vec<Query> {
-        self.queries.clone()
-    }
-
-    /// Gets the constraint of the query.
-    pub fn constraint(&self) -> QueryConstraint {
-        self.constraint.clone()
-    }
-
-    /// Sets the constraint of the query to "must match at least once".
-    pub fn must_match_at_least_once(mut self) -> Self {
-        self.constraint = QueryConstraint::MustMatchAtLeastOnce;
-        self
-    }
-
-    /// Sets the constraint of the query to "must match exactly n times".
-    pub fn must_match_exactly_n_times(mut self, n: usize) -> Self {
-        self.constraint = QueryConstraint::MustMatchExactlyNTimes(n);
-        self
-    }
-
-    /// Sets the constraint of the query to "must not match".
-    pub fn must_not_match(mut self) -> Self {
-        self.constraint = QueryConstraint::MustNotMatch;
-        self
-    }
-
-    /// Gets the reason to share with the student.
-    pub fn reason(&self) -> &str {
-        &self.reason
-    }
-
-    /// Sets the reason to share with the student.
-    pub fn set_reason(mut self, reason: String) -> Self {
-        self.reason = reason;
-        self
-    }
-
     /// Adds a query to run.
     /// If no file has been selected, this will throw an error.
     pub fn query(#[allow(unused_mut)] mut self, q: String) -> Result<Self, QueryError> {
@@ -435,8 +363,8 @@ impl QueryGrader {
 
         let file = self
             .project
-            .identify(self.file())
-            .map_err(|_| QueryError::FileNotFound(self.file().to_string()))?;
+            .identify(&self.file)
+            .map_err(|_| QueryError::FileNotFound(self.file.to_string()))?;
 
         let first_query = first.query()?;
 
@@ -540,14 +468,11 @@ impl QueryGrader {
         let result = match self.run_query() {
             Ok(matches) => matches,
             Err(e) => {
-                return Ok(GradeResult {
-                    requirement: self.req_name.clone(),
-                    grade: Grade {
-                        grade:  0.0,
-                        out_of: self.out_of,
-                    },
-                    reason,
-                    prompt: Some(vec![
+                return Ok(GradeResult::builder()
+                    .requirement(self.req_name.clone())
+                    .grade(Grade::new(0.0, self.out_of))
+                    .reason(reason.clone())
+                    .maybe_prompt(Some(vec![
                         ChatCompletionRequestSystemMessageArgs::default()
                             .content(prompt_set.system_message().to_string())
                             .name("Instructor".to_string())
@@ -564,22 +489,19 @@ impl QueryGrader {
                             .build()
                             .context("Failed to build system message")?
                             .into(),
-                    ]),
-                });
+                    ]))
+                    .build());
             }
         };
 
         match self.constraint {
             QueryConstraint::MustMatchAtLeastOnce => {
                 if result.is_empty() {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  0.0,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: Some(vec![
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(0.0, self.out_of))
+                        .reason(reason.clone())
+                        .maybe_prompt(Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
                                 .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
@@ -592,40 +514,31 @@ impl QueryGrader {
                                 .build()
                                 .context("Failed to build system message")?
                                 .into(),
-                        ]),
-                    })
+                        ]))
+                        .build())
                 } else {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  self.out_of,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: None,
-                    })
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(self.out_of, self.out_of))
+                        .reason(reason.clone())
+                        .maybe_prompt(None)
+                        .build())
                 }
             }
             QueryConstraint::MustMatchExactlyNTimes(n) => {
                 if result.len() == n {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  self.out_of,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: None,
-                    })
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(self.out_of, self.out_of))
+                        .reason(reason.clone())
+                        .maybe_prompt(None)
+                        .build())
                 } else {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  0.0,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: Some(vec![
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(0.0, self.out_of))
+                        .reason(reason.clone())
+                        .maybe_prompt(Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
                                 .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
@@ -638,30 +551,24 @@ impl QueryGrader {
                                 .build()
                                 .context("Failed to build system message")?
                                 .into(),
-                        ]),
-                    })
+                        ]))
+                        .build())
                 }
             }
             QueryConstraint::MustNotMatch => {
                 if result.is_empty() {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  self.out_of,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: None,
-                    })
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(self.out_of, self.out_of))
+                        .reason(reason)
+                        .maybe_prompt(None)
+                        .build())
                 } else {
-                    Ok(GradeResult {
-                        requirement: self.req_name.clone(),
-                        grade: Grade {
-                            grade:  0.0,
-                            out_of: self.out_of,
-                        },
-                        reason,
-                        prompt: Some(vec![
+                    Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(0.0, self.out_of))
+                        .reason(reason)
+                        .maybe_prompt(Some(vec![
                             ChatCompletionRequestSystemMessageArgs::default()
                                 .content(prompt_set.system_message().to_string())
                                 .name("Instructor".to_string())
@@ -674,10 +581,27 @@ impl QueryGrader {
                                 .build()
                                 .context("Failed to build system message")?
                                 .into(),
-                        ]),
-                    })
+                        ]))
+                        .build())
                 }
             }
         }
+    }
+}
+
+impl QueryGrader {
+    /// Builds and runs the query grader.
+    pub fn run(self) -> Result<GradeResult> {
+        self.grade_by_query()
+    }
+}
+
+impl<S> QueryGraderBuilder<S>
+where
+    S: query_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub fn run(self) -> Result<GradeResult> {
+        self.build().run()
     }
 }

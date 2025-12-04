@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 /// Represents a source location identified by file name and line number.
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct LineRef {

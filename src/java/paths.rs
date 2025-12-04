@@ -1,5 +1,9 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::path::{Path, PathBuf};
 
+use bon::builder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,5 +83,31 @@ impl ProjectPaths {
 impl Default for ProjectPaths {
     fn default() -> Self {
         Self::new(PathBuf::from("."))
+    }
+}
+
+/// Builder-friendly constructor for `ProjectPaths` with optional overrides.
+#[builder(finish_fn = build)]
+pub fn project_paths(
+    #[builder(into)] root_dir: PathBuf,
+    source_dir: Option<PathBuf>,
+    build_dir: Option<PathBuf>,
+    test_dir: Option<PathBuf>,
+    lib_dir: Option<PathBuf>,
+    umm_dir: Option<PathBuf>,
+) -> ProjectPaths {
+    let source_dir = source_dir.unwrap_or_else(|| root_dir.join("src"));
+    let build_dir = build_dir.unwrap_or_else(|| root_dir.join("target"));
+    let test_dir = test_dir.unwrap_or_else(|| root_dir.join("test"));
+    let lib_dir = lib_dir.unwrap_or_else(|| root_dir.join("lib"));
+    let umm_dir = umm_dir.unwrap_or_else(|| root_dir.join(".umm"));
+
+    ProjectPaths {
+        root_dir,
+        source_dir,
+        build_dir,
+        test_dir,
+        lib_dir,
+        umm_dir,
     }
 }

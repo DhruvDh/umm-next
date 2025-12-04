@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{
     collections::{HashMap, HashSet},
     ops::RangeInclusive,
@@ -9,6 +12,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs, CreateChatCompletionResponse,
 };
+use bon::Builder;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -35,21 +39,26 @@ struct RenderedSnippet {
 /// snippets.
 type MethodsByFile = HashMap<String, HashSet<String>>;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Builder)]
+#[builder(on(String, into))]
 #[serde(rename_all = "camelCase")]
 /// Parameters describing a single retrieval function call emitted by the LLM.
 pub(crate) struct RetrievalFunctionCallParams {
     /// Fully qualified class name provided by the function call.
+    #[builder(getter)]
     pub(crate) class_name:  String,
     /// Method identifier requested for context extraction.
+    #[builder(getter)]
     pub(crate) method_name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Builder)]
+#[builder(on(String, into))]
 /// Wrapper used to deserialize multiple retrieval requests from the LLM
 /// response.
 pub(crate) struct RetrievalFunctionCallParamsArray {
     /// Collection of individual retrieval parameters.
+    #[builder(default, with = FromIterator::from_iter, getter)]
     pub(crate) params: Vec<RetrievalFunctionCallParams>,
 }
 

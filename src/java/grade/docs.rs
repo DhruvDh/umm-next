@@ -1,7 +1,11 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use anyhow::Result;
 use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
+use bon::Builder;
 use tabled::{
     Table,
     settings::{Alignment, Modify, Panel, Style, Width, object::Rows},
@@ -13,19 +17,29 @@ use crate::{
     java::{JavaFileError, Project, parsers::parser},
     retrieval::build_context_message,
 };
-#[derive(Clone)]
+#[derive(Clone, Builder)]
+#[builder(on(String, into))]
 /// A struct representing arguments to grade_docs function
 pub struct DocsGrader {
     /// * `project`: the project to grade
+    #[builder(getter)]
     pub project:  Project,
     /// * `files`: the files to grade
+    #[builder(with = |iter: impl IntoIterator<Item = impl Into<String>>| {
+        iter.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
+    #[builder(getter)]
     pub files:    Vec<String>,
     /// * `out_of`: the total points for the requirement
+    #[builder(getter)]
     pub out_of:   f64,
     /// * `req_name`: the name of the requirement
+    #[builder(getter)]
     pub req_name: String,
     /// * `penalty`: the penalty to apply for each instance of a violation.
     ///   Optional, default is 3
+    #[builder(default = 3.0)]
+    #[builder(getter)]
     pub penalty:  f64,
 }
 
@@ -42,65 +56,6 @@ impl Default for DocsGrader {
 }
 
 impl DocsGrader {
-    /// Getter for project
-    pub fn project(&self) -> Project {
-        self.project.clone()
-    }
-
-    /// Setter for project
-    pub fn set_project(mut self, project: Project) -> Self {
-        self.project = project;
-        self
-    }
-
-    /// Getter for files
-    pub fn files(&self) -> &[String] {
-        &self.files
-    }
-
-    /// Setter for files
-    pub fn set_files<I, S>(mut self, files: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.files = files.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Getter for out_of
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// Setter for out_of
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
-
-    /// Getter for req_name
-    pub fn req_name(&self) -> String {
-        self.req_name.clone()
-    }
-
-    /// Setter for req_name
-    pub fn set_req_name(mut self, req_name: String) -> Self {
-        self.req_name = req_name;
-        self
-    }
-
-    /// Getter for penalty
-    pub fn penalty(&self) -> f64 {
-        self.penalty
-    }
-
-    /// Setter for penalty
-    pub fn set_penalty(mut self, penalty: f64) -> Self {
-        self.penalty = penalty;
-        self
-    }
-
     /// Grades documentation by using the -Xdoclint javac flag.
     /// Scans javac output for generated warnings and grades accordingly.
     pub async fn grade_docs(self) -> Result<GradeResult> {
@@ -129,12 +84,12 @@ impl DocsGrader {
                         build_context_message(&self.project, None, diags)?,
                     ];
 
-                    return Ok(GradeResult {
-                        requirement: self.req_name,
-                        grade:       Grade::new(0.0, out_of),
-                        reason:      String::from("See above."),
-                        prompt:      Some(messages),
-                    });
+                    return Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(0.0, out_of))
+                        .reason("See above.")
+                        .maybe_prompt(Some(messages))
+                        .build());
                 }
                 Err(e) => {
                     let messages = vec![
@@ -150,12 +105,12 @@ impl DocsGrader {
                             .into(),
                     ];
 
-                    return Ok(GradeResult {
-                        requirement: self.req_name,
-                        grade:       Grade::new(0.0, out_of),
-                        reason:      String::from("See above."),
-                        prompt:      Some(messages),
-                    });
+                    return Ok(GradeResult::builder()
+                        .requirement(self.req_name.clone())
+                        .grade(Grade::new(0.0, out_of))
+                        .reason("See above.")
+                        .maybe_prompt(Some(messages))
+                        .build());
                 }
             };
             outputs.push(output.clone());
@@ -231,11 +186,28 @@ impl DocsGrader {
         } else {
             None
         };
-        Ok(GradeResult {
-            requirement: self.req_name,
-            grade: Grade::new(grade, out_of),
-            reason: String::from("See above."),
-            prompt,
-        })
+        Ok(GradeResult::builder()
+            .requirement(self.req_name.clone())
+            .grade(Grade::new(grade, out_of))
+            .reason("See above.")
+            .maybe_prompt(prompt)
+            .build())
+    }
+}
+
+impl DocsGrader {
+    /// Builds and runs the documentation grader.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.grade_docs().await
+    }
+}
+
+impl<S> DocsGraderBuilder<S>
+where
+    S: docs_grader_builder::IsComplete,
+{
+    /// Build the grader and immediately execute it.
+    pub async fn run(self) -> Result<GradeResult> {
+        self.build().run().await
     }
 }

@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::{result::Result as StdResult, sync::Arc};
 
 use anyhow::{Context as AnyhowContext, Result, bail};

@@ -1,15 +1,22 @@
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
 use std::fmt::Display;
 
 use anyhow::{Context, Result};
 use async_openai::types::chat::ChatCompletionRequestMessage;
+use bon::Builder;
+use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Builder, Serialize, Deserialize)]
 /// A struct representing a grade
 pub struct Grade {
     /// The actual grade received
+    #[builder(getter)]
     pub grade:  f64,
     /// The maximum grade possible
+    #[builder(getter)]
     pub out_of: f64,
 }
 
@@ -30,28 +37,6 @@ impl Grade {
             out_of.parse::<f64>().context("Failed to parse out of")?,
         ))
     }
-
-    /// a getter for the grade
-    pub fn grade(&self) -> f64 {
-        self.grade
-    }
-
-    /// a getter for the out_of
-    pub fn out_of(&self) -> f64 {
-        self.out_of
-    }
-
-    /// a setter for the grade
-    pub fn set_grade(mut self, grade: f64) -> Self {
-        self.grade = grade;
-        self
-    }
-
-    /// a setter for the out_of
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.out_of = out_of;
-        self
-    }
 }
 
 impl Display for Grade {
@@ -60,79 +45,30 @@ impl Display for Grade {
     }
 }
 
-#[derive(Tabled, Clone, Default)]
+#[derive(Tabled, Clone, Default, Builder, Serialize, Deserialize)]
+#[builder(on(String, into))]
 /// A struct to store grading results and display them
 pub struct GradeResult {
     #[tabled(rename = "Requirement")]
     /// * `requirement`: refers to Requirement ID
+    #[builder(getter)]
     pub(crate) requirement: String,
     #[tabled(rename = "Grade")]
     /// * `grade`: grade received for above Requirement
+    #[builder(default)]
+    #[builder(getter)]
     pub(crate) grade:       Grade,
     #[tabled(rename = "Reason")]
     /// * `reason`: the reason for penalties applied, if any
+    #[builder(getter)]
     pub(crate) reason:      String,
     #[tabled(skip)]
     /// * `prompt`: the prompt for the AI TA
+    #[builder(getter)]
     pub(crate) prompt:      Option<Vec<ChatCompletionRequestMessage>>,
 }
 
 impl GradeResult {
-    /// a getter for Requirement
-    pub fn requirement(&self) -> String {
-        self.requirement.clone()
-    }
-
-    /// a setter for Requirement
-    pub fn set_requirement(mut self, requirement: String) -> Self {
-        self.requirement = requirement;
-        self
-    }
-
-    /// a getter for Reason
-    pub fn reason(&self) -> String {
-        self.reason.clone()
-    }
-
-    /// a setter for Reason
-    pub fn set_reason(mut self, reason: String) -> Self {
-        self.reason = reason;
-        self
-    }
-
-    /// a getter for the self.grade.grade
-    pub fn grade(&self) -> f64 {
-        self.grade.grade()
-    }
-
-    /// a getter for the self.grade.out_of
-    pub fn out_of(&self) -> f64 {
-        self.grade.out_of()
-    }
-
-    /// a setter for the self.grade.grade
-    pub fn set_grade(mut self, grade: f64) -> Self {
-        self.grade = self.grade.set_grade(grade);
-        self
-    }
-
-    /// a setter for the self.grade.out_of
-    pub fn set_out_of(mut self, out_of: f64) -> Self {
-        self.grade = self.grade.set_out_of(out_of);
-        self
-    }
-
-    /// a getter for the prompt
-    pub fn prompt(&self) -> Option<Vec<ChatCompletionRequestMessage>> {
-        self.prompt.clone()
-    }
-
-    /// a setter for the prompt
-    pub fn set_prompt(mut self, prompt: Option<Vec<ChatCompletionRequestMessage>>) -> Self {
-        self.prompt = prompt;
-        self
-    }
-
     /// Returns the underlying grade struct.
     pub fn grade_struct(&self) -> &Grade {
         &self.grade
