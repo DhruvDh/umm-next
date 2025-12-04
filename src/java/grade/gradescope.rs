@@ -88,7 +88,7 @@ impl Default for GradescopeConfig {
     }
 }
 /// Represents output format settings for Gradescope submissions.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum GradescopeOutputFormat {
     /// Plain text format.
@@ -106,7 +106,7 @@ pub enum GradescopeOutputFormat {
 }
 
 /// Represents visibility settings for Gradescope submissions and test cases.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum GradescopeVisibility {
     /// Hidden from students.
@@ -120,7 +120,7 @@ pub enum GradescopeVisibility {
 }
 
 /// Represents the status of a test case in Gradescope submissions.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum GradescopeStatus {
     /// Indicates the test case passed successfully.

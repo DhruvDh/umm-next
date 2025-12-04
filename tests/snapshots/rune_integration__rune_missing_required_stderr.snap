@@ -1,0 +1,8 @@
+---
+source: tests/rune_integration.rs
+expression: stderr
+---
+Error: Failed to execute Rune script `/Users/dhruvdh/repositories/umm-next/fixtures/rune/missing_required.rn`
+
+Caused by:
+    DiffGrader missing required fields: req_name, out_of

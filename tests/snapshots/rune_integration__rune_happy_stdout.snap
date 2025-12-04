@@ -1,0 +1,5 @@
+---
+source: tests/rune_integration.rs
+expression: stdout
+---
+

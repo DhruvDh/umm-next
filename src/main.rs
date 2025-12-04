@@ -139,7 +139,15 @@ fn options() -> Cmd {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = run_cli().await {
+        eprintln!("{:#?}", err);
+        std::process::exit(1);
+    }
+}
+
+/// Sets up logging, parses CLI arguments, and dispatches the selected command.
+async fn run_cli() -> Result<()> {
     dotenv().ok();
 
     let fmt = fmt::layer()
@@ -160,27 +168,39 @@ async fn main() -> Result<()> {
                 let file = Project::new()?.identify(f.as_str())?;
                 match file.run(None).await {
                     Ok(out) => println!("{out}"),
-                    Err(e) => eprintln!("{:#?}", e),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
             JavaCmd::Check(f) => {
                 let file = Project::new()?.identify(f.as_str())?;
                 match file.check().await {
                     Ok(out) => println!("{out}"),
-                    Err(e) => eprintln!("{:#?}", e),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
             JavaCmd::Test(f, t) => {
                 let project = Project::new()?;
                 let file = project.identify(f.as_str())?;
-                let out = if t.is_empty() {
-                    file.test(Vec::<&str>::new(), Some(&project)).await?
+                let result = if t.is_empty() {
+                    file.test(Vec::<&str>::new(), Some(&project)).await
                 } else {
                     let test_refs: Vec<&str> = t.iter().map(String::as_str).collect();
-                    file.test(test_refs, Some(&project)).await?
+                    file.test(test_refs, Some(&project)).await
                 };
 
-                println!("{out}");
+                match result {
+                    Ok(out) => println!("{out}"),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
             JavaCmd::DocCheck(f) => {
                 let file = Project::new()?.identify(f.as_str())?;
@@ -194,12 +214,13 @@ async fn main() -> Result<()> {
             }
             JavaCmd::Info => Project::new()?.info()?,
         },
-        Cmd::Update => {
-            match update() {
-                Ok(_) => {}
-                Err(e) => eprintln!("{e}"),
-            };
-        }
+        Cmd::Update => match update() {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("{:#?}", e);
+                std::process::exit(1);
+            }
+        },
     };
 
     Ok(())

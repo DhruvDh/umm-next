@@ -2,8 +2,8 @@
 
 > **Status — Updated 2025-12-04**
 >
-> - **CLI `grade`:** Runs Rune scripts via `scripting::run_file`, but **no `umm` bindings are registered**; scripts currently get only Rune’s std modules.
-> - **Scripting:** **Decision pending.** Python bindings (embedded runtime) are under trial on `try-python-scripting`. Rune design notes are retained **as deferred reference** until a decision is made.
+> - **CLI `grade`:** Runs Rune scripts via `scripting::run_file` with installed `umm::{java, gradescope, config, retrieval}` modules; expects `async fn main()` returning `Result<()>` (type annotation optional).
+> - **Scripting:** Rune bindings now expose state-erased grader builders, Gradescope config/helpers, and config/retrieval toggles. Python bindings (embedded runtime) remain branch-only on `try-python-scripting`.
 > - **Rhai:** Entry flow removed; residual types compile but are inert without the Rhai entrypoint.
 > - **Module layout:** Java sources live under `src/java/*`; configuration and prompts live in `src/config.rs`; `src/constants.rs` is intentionally empty.
 > - **Active retrieval toggle:** Managed with an `std::sync::atomic::AtomicBool` stored in `config::ConfigState`.
@@ -160,12 +160,20 @@
 - `src/util.rs` — Shared helpers (`umm_path`, `find_files`).
 - `src/lib.rs` — Crate root exporting configuration, Java helpers, process utilities, retrieval, scripting runtime, and shared types.
 - `src/main.rs` — CLI wiring via `bpaf`; dispatches to library commands and executes Rune grading scripts.
+- `src/scripting/rune/mod.rs` — Rune installer glue (`install_all_modules`); shared error helper.
+- `src/scripting/rune/modules/` — Rune module installers:
+  - `java.rs` — Project + grader wrappers, GradeResult/DiffCase wrappers, helpers (`show_results`, `grade_all`).
+  - `gradescope.rs` — GradescopeConfig wrapper and enums.
+  - `config.rs` — Active-retrieval toggle + heuristic setters.
+  - `retrieval.rs` — HeuristicConfig wrapper + apply.
 - `src/config.rs` — Runtime/env bootstrap: loads prompts, Supabase metadata, HTTP client, retrieval endpoint, and active-retrieval flag.
 - `src/retrieval.rs` — Retrieval modes (`Full`, `Heuristic`, `Active`) and the `RetrievalFormatter` trait implemented by language modules.
 - `src/scripting/mod.rs` — Rune VM bootstrapper (`Context`, `Unit`, `Vm`) plus the entrypoint used by `umm java grade`.
 - `src/scripting/java.rs` — `umm::java` Rune module: builders for Docs/Unit/Diff graders, `Project` helpers, and `show_results`.
 - `fixtures/java/` — Java fixtures for integration tests; initialize submodules with `git submodule update --init --recursive`.
+- `fixtures/rune/` — Rune scripts used by integration tests (`happy.rn`, `missing_required.rn`, `gradescope_json.rn`).
 - `examples/sample.rn` — Reference Rune script demonstrating Docs/Unit/Diff graders and `show_results`.
+- `tests/rune_integration.rs` — CLI-level Rune integration tests (happy path, missing required fields, Gradescope JSON debug).
 
 ## Important Code References
 
@@ -200,10 +208,11 @@
 
 ## Scripting Strategy (Decision Record)
 
-- **Decision (current state)**: `umm grade` executes Rune scripts via `scripting::run_file`, but only Rune std modules are registered; no `umm` bindings are exposed yet. Rune remains a deferred/experimental surface.
+- **Decision (current state)**: `umm grade` executes Rune scripts via `scripting::run_file` with `umm::{java, gradescope, config, retrieval}` modules installed. Scripts export `pub async fn main() { ... Ok(()) }` (return type can be elided) and use state-erased builder wrappers for graders. Python bindings remain experimental on `try-python-scripting`.
 - **Next steps (todo)**:
-  - If we keep Rune, add a `umm` module that registers `Project`, graders, and helpers, then refresh samples/docs.
-  - In parallel, continue evaluating the embedded-Python prototype on `try-python-scripting`.
+  - Keep Rune surface stable (namespace `umm::java::...`) while we explore `umm::python` as a parallel module.
+  - Harden sandboxing/timeouts before exposing user-written network/file operations; module install is centralized in `scripting::rune::install_all_modules`.
+  - Grow fixtures and snapshots as new graders/helpers are added (query grader now covered via `fixtures/rune/query.rn`).
 
 ## Prompts, Env, and Global Config
 
@@ -223,13 +232,15 @@
 ## Design Rationale & Invariants
 
 - Paths must remain instance-scoped; avoid reintroducing globals.
-- `grade` currently executes Rune scripts on main, but scripts only have Rune std modules until we register `umm` bindings.
+- `grade` executes Rune scripts with `umm` modules installed; keep the scripting namespace stable (`umm::java::...`) and builder wrappers state-erased.
+- Query grader wrappers default captures to `"body"` and expose `queries_with_capture(...)` so Rune scripts can pass captures explicitly without tripping `NoCaptureSelected`.
 - Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
 
 ## Definition of Done (main)
 
 - [ ] `cargo fmt && cargo clippy --all-targets` run cleanly.
 - [ ] `umm java run/test/doc-check` succeed against a sample project with JDK + JUnit jars available.
+- [ ] `cargo test rune_integration` (Rune fixtures + insta snapshots) passes deterministically.
 - [ ] Status banner is updated (date + scripting decision) when behavior changes.
 - [ ] Module Map lists only files present on `main` (no branch-only paths).
 - [ ] Active-retrieval behavior documented as `AtomicBool` with helpers (`set_active_retrieval`, `active_retrieval_enabled`).
@@ -436,6 +447,7 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 
 ## Doc Change Log
 
+- 2025-12-04: Rune surface tightened: QueryGrader wrapper now sets captures (or accepts `queries_with_capture`), avoiding runtime `NoCaptureSelected`; added Rune fixtures/snapshots (happy, missing_required, gradescope_json, query) and refreshed task/report/tutorial accordingly.
 - 2025-12-04: Replaced remaining `typed-builder` usage with `bon` (3.8.1); enabled builder getters, iterable setters, and `bon::vec!` helpers; added smoke tests for builder ergonomics and refreshed README to point Rune users at the bon builder surface.
 - 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
   `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped

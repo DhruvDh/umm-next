@@ -1,0 +1,17 @@
+use umm::java::{Project, QueryGrader, show_results};
+
+pub async fn main() {
+    let project = Project::new()?;
+
+    let grade = QueryGrader::builder()
+        .project(project)
+        .file("Main")
+        .req_name("query")
+        .out_of(1.0)
+        .queries_with_capture([("((method_declaration) @body)", "body")])
+        .run()
+        .await?;
+
+    show_results([grade])?;
+    Ok(())
+}

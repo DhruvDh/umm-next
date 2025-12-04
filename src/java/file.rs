@@ -80,6 +80,14 @@ fn normalize_stacktrace_line(line: &str) -> String {
     line.replace("\\\\", "\\").replace("\\\"", "\"")
 }
 
+/// Detects JUnit method selector resolution failures (common with @Nested
+/// tests).
+fn is_method_selector_resolution_error(output: &str) -> bool {
+    output.contains("MethodSelector")
+        || output.contains("Could not find method with name")
+        || output.contains("resolution failed")
+}
+
 /// Possible failures while decoding collected process output.
 #[derive(thiserror::Error, Debug)]
 enum DecodeOutputError {
@@ -791,27 +799,39 @@ impl File {
             .collect();
         // TODO: Need to understand the right fallback when no selectors exist;
         // scan-class-path may be too broad.
+        // Run JUnit once with explicit selectors; if selectors fail to resolve
+        // (common with @Nested classes), retry with scan-class-path.
+        let mut collected = {
+            let args = self
+                .junit_args(&selectors)
+                .map_err(JavaFileError::Unknown)?;
+            Self::collect_process(
+                java.as_os_str(),
+                &args,
+                StdinSource::Inherit,
+                config::java_timeout(),
+            )
+            .await?
+        };
 
-        let args = self
-            .junit_args(&selectors)
-            .map_err(JavaFileError::Unknown)?;
+        let mut output = decode_output(collected.stderr, collected.stdout, "JUnit")?;
 
-        let collected = Self::collect_process(
-            java.as_os_str(),
-            &args,
-            StdinSource::Inherit,
-            config::java_timeout(),
-        )
-        .await?;
+        if !collected.status.success()
+            && !selectors.is_empty()
+            && is_method_selector_resolution_error(&output)
+        {
+            let retry_args = self.junit_args(&[]).map_err(JavaFileError::Unknown)?;
+            collected = Self::collect_process(
+                java.as_os_str(),
+                &retry_args,
+                StdinSource::Inherit,
+                config::java_timeout(),
+            )
+            .await?;
+            output = decode_output(collected.stderr, collected.stdout, "JUnit")?;
+        }
 
-        let process::Collected {
-            status,
-            stdout,
-            stderr,
-        } = collected;
-        let output = decode_output(stderr, stdout, "JUnit")?;
-
-        if status.success() {
+        if collected.status.success() {
             Ok(output)
         } else {
             let mut diags = Vec::new();

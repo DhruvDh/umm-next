@@ -1,0 +1,15 @@
+---
+source: tests/rune_integration.rs
+expression: stderr
+---
+Warning: No reason provided for query grading. Feedback to student will not be very helpful.
+┌─────────────┬───────────┬─────────────────────────┐
+│                 Grading Overview                  │
+├─────────────┼───────────┼─────────────────────────┤
+│ Requirement │ Grade     │ Reason                  │
+├─────────────┼───────────┼─────────────────────────┤
+│ query       │ 1.00/1.00 │ Query Constraint: Must  │
+│             │           │ match at least once.    │
+├─────────────┼───────────┼─────────────────────────┤
+│                 Total: 1.00/1.00                  │
+└─────────────┴───────────┴─────────────────────────┘

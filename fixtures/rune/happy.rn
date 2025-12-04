@@ -1,0 +1,18 @@
+use umm::java::{Project, DiffGrader, grade_all, show_results};
+
+pub async fn main() {
+    let project = Project::new()?;
+
+    let diff = DiffGrader::builder()
+        .project(project)
+        .file("Main")
+        .req_name("hello")
+        .out_of(5.0)
+        .cases([("Hello from Rune\n", None)])
+        .run()
+        .await?;
+
+    let results = grade_all([diff])?;
+    show_results(results)?;
+    Ok(())
+}

@@ -14,3 +14,4 @@ target
 
 # Untrack PLAN doc
 PLAN.md
+fixtures/java/rune-hello/results.json

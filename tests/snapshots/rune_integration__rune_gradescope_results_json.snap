@@ -1,0 +1,21 @@
+---
+source: tests/rune_integration.rs
+expression: contents
+---
+{
+  "test_output_format": "md",
+  "test_name_format": "text",
+  "visibility": "visible",
+  "stdout_visibility": "visible",
+  "tests": [
+    {
+      "score": 2.0,
+      "max_score": 2.0,
+      "status": "passed",
+      "name": "hello-json",
+      "name_format": "text",
+      "output": "",
+      "output_format": "md"
+    }
+  ]
+}

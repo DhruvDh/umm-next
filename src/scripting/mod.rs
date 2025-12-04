@@ -1,18 +1,23 @@
 #![warn(missing_docs)]
-#![warn(clippy::missing_docs_in_private_items)]
+#![deny(missing_docs)]
 
 use std::{result::Result as StdResult, sync::Arc};
 
-use anyhow::{Context as AnyhowContext, Result, bail};
-use rune::{
-    Context, Diagnostics, FromValue, Source, Sources, Vm,
+use ::rune::{
+    Context, Diagnostics, FromValue, Source, Sources, Vm, prepare,
     termcolor::{ColorChoice, StandardStream},
 };
+use anyhow::{Context as AnyhowContext, Result};
+
+pub mod rune;
 
 /// Builds the Rune context with the default standard library.
 pub fn build_context() -> Result<Context> {
-    let context = Context::with_default_modules()
+    let mut context = Context::with_default_modules()
         .context("Failed to create Rune context with default modules")?;
+
+    crate::scripting::rune::install_all_modules(&mut context)
+        .context("Failed to install umm Rune modules")?;
 
     Ok(context)
 }
@@ -30,7 +35,7 @@ pub async fn run_file(path: &str) -> Result<()> {
 
     let mut diagnostics = Diagnostics::new();
 
-    let prepared = rune::prepare(&mut sources)
+    let prepared = prepare(&mut sources)
         .with_context(&context)
         .with_diagnostics(&mut diagnostics)
         .build();
@@ -46,18 +51,21 @@ pub async fn run_file(path: &str) -> Result<()> {
 
     let mut vm = Vm::new(runtime, Arc::new(unit));
 
-    let value = vm
-        .async_call(["main"], ())
-        .await
+    let mut exec = vm
+        .execute(["main"], ())
         .context("Failed to execute `main` in Rune script")?;
 
-    let outcome: StdResult<(), String> = <StdResult<(), String> as FromValue>::from_value(value)
-        .context("Rune script returned a value that could not be decoded")?;
+    // `async_complete` returns a `VmResult<Value>`; convert it to a plain `Value`
+    // so host-side error reporting stays in `anyhow`.
+    let value = exec
+        .async_complete()
+        .await
+        .into_result()
+        .context("Rune script failed during async execution")?;
 
-    match outcome {
-        Ok(()) => Ok(()),
-        Err(message) => {
-            bail!("{message}");
-        }
-    }
+    let outcome: StdResult<(), ::rune::support::Error> =
+        <StdResult<(), ::rune::support::Error> as FromValue>::from_value(value)
+            .context("Rune script returned a value that could not be decoded")?;
+
+    outcome.map_err(|e| anyhow::anyhow!("{e}"))
 }

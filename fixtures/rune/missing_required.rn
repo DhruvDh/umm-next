@@ -1,0 +1,15 @@
+use umm::java::{Project, DiffGrader};
+
+pub async fn main() {
+    let project = Project::new()?;
+
+    // Missing req_name and out_of on purpose to trigger a friendly error.
+    let _grade = DiffGrader::builder()
+        .project(project)
+        .file("Main")
+        .cases([("Hello from Rune\n", None)])
+        .run()
+        .await?;
+
+    Ok(())
+}

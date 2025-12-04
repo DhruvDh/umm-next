@@ -96,7 +96,8 @@ impl Project {
 
     /// Prints project struct as a json
     pub fn info(&self) -> Result<()> {
-        println!("{}", serde_json::to_string(&self)?);
+        // Keep the same shape but use pretty JSON so humans can read it more easily.
+        println!("{}", serde_json::to_string_pretty(&self)?);
         Ok(())
     }
 
