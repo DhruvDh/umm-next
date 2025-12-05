@@ -1,9 +1,9 @@
-use umm::java::{Project, QueryGrader, show_results};
+use umm::java::{new_project, new_query_grader, show_results};
 
 pub async fn main() {
-    let project = Project::new()?;
+    let project = new_project()?;
 
-    let grade = QueryGrader::builder()
+    let grade = new_query_grader()
         .project(project)
         .file("Main")
         .req_name("query")
@@ -11,6 +11,11 @@ pub async fn main() {
         .queries_with_capture([("((method_declaration) @body)", "body")])
         .run()
         .await?;
+
+    match grade.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
 
     show_results([grade])?;
     Ok(())

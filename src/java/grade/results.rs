@@ -31,7 +31,9 @@ impl Grade {
     /// Creates a new grade from a string -
     /// * `grade_string` - A string in the format `grade/out_of`, eg. `10/20`
     pub fn grade_from_string(grade_string: String) -> Result<Grade> {
-        let (grade, out_of) = grade_string.split_once('/').unwrap_or(("0", "0"));
+        let (grade, out_of) = grade_string.split_once('/').with_context(|| {
+            format!("Grade string must be <score>/<out_of>, got '{grade_string}'")
+        })?;
         Ok(Grade::new(
             grade.parse::<f64>().context("Failed to parse grade")?,
             out_of.parse::<f64>().context("Failed to parse out of")?,

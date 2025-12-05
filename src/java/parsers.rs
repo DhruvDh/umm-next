@@ -112,14 +112,8 @@ peg::parser! {
             }
 
         rule mutation_test_examined_path() -> Vec<String>
-            = a:mutations_csv_word()? "/"? b:mutations_csv_word()? "/"?  c:mutations_csv_word()?
-            {
-                let mut res = vec![];
-                if let Some(a) = a { res.push(a); }
-                if let Some(b) = b { res.push(b); }
-                if let Some(c) = c { res.push(c); }
-                res
-            }
+            = segs:(mutations_csv_word() ** "/")
+            { segs }
 
         rule mutation_test_examined_none() -> &'input str
             = $("none")
@@ -146,24 +140,49 @@ peg::parser! {
                 let mut test_file_name = String::from("NA");
                 let mut test_method_name = String::from("None");
 
-                if test.len() >= 3 {
-                    let raw_class = test.get(1).cloned().unwrap_or_default();
-                    let raw_method = test.get(2).cloned().unwrap_or_default();
+        // Prefer explicit class/method markers if present; otherwise fall back to last
+        // two segments. Normalize method names to strip trailing parens.
+        for seg in &test {
+            if let Some((_, rhs)) = seg.split_once("[class:") {
+                test_file_name = rhs.trim_end_matches(']').to_string();
+            } else if let Some((_, rhs)) = seg.split_once("[runner:") {
+                test_file_name = rhs.trim_end_matches(']').to_string();
+            }
+        }
 
-                    let splitter_class = if raw_class.contains("[runner:") { "[runner:" } else { "[class:" };
-                    if let Some((_, rhs)) = raw_class.split_once(splitter_class) {
-                        test_file_name = rhs.replace(']', "");
-                    } else {
-                        test_file_name = raw_class;
-                    }
+        for seg in &test {
+            if let Some((_, rhs)) = seg.split_once("[method:") {
+                test_method_name = rhs
+                    .trim_end_matches(']')
+                    .trim_end_matches(')')
+                    .trim_end_matches('(')
+                    .to_string();
+                break;
+            } else if let Some((_, rhs)) = seg.split_once("[test:") {
+                test_method_name = rhs
+                    .trim_end_matches(']')
+                    .trim_end_matches(')')
+                    .trim_end_matches('(')
+                    .to_string();
+                break;
+            }
+        }
 
-                    let splitter_method = if raw_method.contains("[test:") { "[test:" } else { "[method:" };
-                    if let Some((_, rhs)) = raw_method.split_once(splitter_method) {
-                        test_method_name = rhs.replace("()]", "");
-                    } else {
-                        test_method_name = raw_method;
-                    }
-                }
+        if test_file_name == "NA" && test.len() >= 2 {
+            test_file_name = test.get(test.len() - 2).cloned().unwrap_or_default();
+        }
+        if test_method_name == "None" && !test.is_empty() {
+            let fallback = test.last().cloned().unwrap_or_default();
+            if fallback.eq_ignore_ascii_case("none") {
+                test_method_name = "None".to_string();
+            } else {
+                test_method_name = fallback
+                    .trim_end_matches(']')
+                    .trim_end_matches(')')
+                    .trim_end_matches('(')
+                    .to_string();
+            }
+        }
 
                 MutationDiagnostic::builder()
                     .line_number(line_no)

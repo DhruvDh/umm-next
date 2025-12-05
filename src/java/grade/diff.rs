@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
@@ -195,6 +195,9 @@ impl DiffGrader {
 
     /// Builds and runs the configured diff grader.
     pub async fn run(self) -> Result<GradeResult> {
+        if self.cases.is_empty() {
+            bail!("DiffGrader requires at least one diff case");
+        }
         self.grade_by_diff().await
     }
 

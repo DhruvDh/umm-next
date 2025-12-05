@@ -1,9 +1,9 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use std::{collections::HashSet, ffi::OsString, time::Duration};
+use std::{collections::HashSet, ffi::OsString, path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
@@ -39,7 +39,8 @@ struct TestRunOutcome {
 }
 
 /// Normalized configuration extracted from the Rhai mutation grader inputs.
-struct MutationInputs {
+#[derive(Clone)]
+pub struct MutationInputs {
     /// Fully qualified test classes to run.
     target_tests:     Vec<String>,
     /// Source classes subject to mutation testing.
@@ -48,6 +49,43 @@ struct MutationInputs {
     excluded_methods: Vec<String>,
     /// Classes whose calls should be avoided during mutation.
     avoid_calls_to:   Vec<String>,
+}
+
+impl MutationInputs {
+    /// Convenience constructor used by tests and callers.
+    pub fn new(
+        target_tests: impl Into<Vec<String>>,
+        target_classes: impl Into<Vec<String>>,
+        excluded_methods: impl Into<Vec<String>>,
+        avoid_calls_to: impl Into<Vec<String>>,
+    ) -> Self {
+        Self {
+            target_tests:     target_tests.into(),
+            target_classes:   target_classes.into(),
+            excluded_methods: excluded_methods.into(),
+            avoid_calls_to:   avoid_calls_to.into(),
+        }
+    }
+
+    /// Borrow target tests.
+    pub fn target_tests(&self) -> &[String] {
+        &self.target_tests
+    }
+
+    /// Borrow target classes.
+    pub fn target_classes(&self) -> &[String] {
+        &self.target_classes
+    }
+
+    /// Borrow excluded methods.
+    pub fn excluded_methods(&self) -> &[String] {
+        &self.excluded_methods
+    }
+
+    /// Borrow classes to avoid calling.
+    pub fn avoid_calls_to(&self) -> &[String] {
+        &self.avoid_calls_to
+    }
 }
 #[derive(Clone, Default, Builder)]
 #[builder(on(String, into))]
@@ -418,6 +456,9 @@ impl ByUnitTestGrader {
 impl ByUnitTestGrader {
     /// Builds and runs the unit-test grader.
     pub async fn run(self) -> Result<GradeResult> {
+        if self.test_files.is_empty() {
+            bail!("ByUnitTestGrader requires at least one test file");
+        }
         self.grade_by_tests().await
     }
 }
@@ -436,6 +477,9 @@ where
 #[builder(on(String, into))]
 /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
 pub struct UnitTestGrader {
+    /// Project to mutate.
+    #[builder(getter)]
+    pub project:          Project,
     /// Name of the requirement.
     #[builder(getter)]
     pub req_name:         String,
@@ -471,6 +515,11 @@ pub struct UnitTestGrader {
 }
 
 impl UnitTestGrader {
+    /// Location where PIT writes the CSV summary for surviving mutations.
+    pub(crate) fn mutation_report_path(project: &Project) -> PathBuf {
+        project.paths().report_dir().join("mutations.csv")
+    }
+
     /// Runs mutation tests using ![Pitest](http://pitest.org/) to grade unit tests written by students.
     pub async fn grade_unit_tests(&self) -> Result<GradeResult> {
         eprintln!("Running Mutation tests -");
@@ -480,21 +529,54 @@ impl UnitTestGrader {
         let inputs = self
             .normalize_inputs()
             .context("Failed to interpret mutation grader configuration")?;
-        let project = Project::new().context("Failed to discover project for mutation grader")?;
+        let project = self.project.clone();
 
-        let args = Self::build_mutation_args(&project, &inputs)
-            .context("Failed to assemble mutation testing arguments")?;
+        let result = async {
+            let args = Self::build_mutation_args(&project, &inputs)
+                .context("Failed to assemble mutation testing arguments")?;
 
-        let collected = Self::run_mutation_command(&project, &args)
-            .await
-            .context("Failed to execute PIT mutation coverage report")?;
+            let collected = Self::run_mutation_command(&project, &args)
+                .await
+                .context("Failed to execute PIT mutation coverage report")?;
 
-        let prompts = config::java_prompts();
+            let prompts = config::java_prompts();
+            let report_path = Self::mutation_report_path(&project);
 
-        if collected.status.success() {
-            Self::handle_success(&project, &prompts, inputs, req_name, out_of).await
-        } else {
-            Self::handle_failure(&prompts, collected, inputs, req_name, out_of)
+            if collected.status.success() {
+                if !report_path.exists() {
+                    eprintln!(
+                        "PIT exited successfully but no mutation report found at {}; treating as \
+                         failure.",
+                        report_path.display()
+                    );
+                    return Self::handle_failure(
+                        &prompts,
+                        collected,
+                        inputs,
+                        req_name.clone(),
+                        out_of,
+                    );
+                }
+
+                Self::handle_success(&project, &prompts, inputs.clone(), req_name.clone(), out_of)
+                    .await
+                    .or_else(|err| {
+                        eprintln!("Mutation report handling failed: {err}");
+                        Self::handle_failure(&prompts, collected, inputs, req_name.clone(), out_of)
+                    })
+            } else {
+                Self::handle_failure(&prompts, collected, inputs, req_name.clone(), out_of)
+            }
+        }
+        .await;
+
+        match result {
+            Ok(grade) => Ok(grade),
+            Err(e) => Ok(GradeResult::builder()
+                .requirement(req_name)
+                .grade(Grade::new(0.0, out_of))
+                .reason(format!("Mutation grader failed: {e}"))
+                .build()),
         }
     }
 
@@ -509,7 +591,10 @@ impl UnitTestGrader {
     }
 
     /// Builds the argument list used to invoke PIT mutation testing.
-    fn build_mutation_args(project: &Project, inputs: &MutationInputs) -> Result<Vec<OsString>> {
+    pub fn build_mutation_args(
+        project: &Project,
+        inputs: &MutationInputs,
+    ) -> Result<Vec<OsString>> {
         let class_path = classpath(project.paths())
             .context("Failed to construct classpath for mutation grader")?;
         let source_dirs = [
@@ -518,12 +603,22 @@ impl UnitTestGrader {
         ]
         .join(",");
 
+        // Ensure report directory is absolute and exists so PIT always writes
+        // under the project root (avoids sandbox cwd surprises).
+        let report_dir = project.paths().report_dir();
+        std::fs::create_dir_all(report_dir)
+            .context(format!("Failed to create {}", report_dir.display()))?;
+
         Ok(vec![
             "--class-path".into(),
             class_path.into(),
             "org.pitest.mutationtest.commandline.MutationCoverageReport".into(),
             "--reportDir".into(),
-            "test_reports".into(),
+            report_dir
+                .to_str()
+                .unwrap_or("test_reports")
+                .to_string()
+                .into(),
             "--failWhenNoMutations".into(),
             "true".into(),
             "--threads".into(),
@@ -605,13 +700,16 @@ impl UnitTestGrader {
     ) -> Result<GradeResult> {
         let process::Collected { stdout, stderr, .. } = collected;
 
-        let mut output = [
-            String::from_utf8(stderr).context("Failed to decode mutation stderr as utf8")?,
-            String::from_utf8(stdout).context("Failed to decode mutation stdout as utf8")?,
-        ]
-        .concat();
+        // Decode output lossily to avoid bubbling up IO/UTF-8 errors from PIT.
+        let mut output = String::from_utf8_lossy(&stderr).to_string();
+        output.push_str(&String::from_utf8_lossy(&stdout));
 
-        eprintln!("{output}");
+        // Keep the console output deterministic while still surfacing a clue
+        // that mutation testing failed. Full stderr/stdout is preserved inside
+        // the prompt for downstream consumption.
+        if !output.is_empty() {
+            eprintln!("Mutation tests failed; details captured in prompt.");
+        }
         if output.len() > config::PROMPT_TRUNCATE {
             output.truncate(config::PROMPT_TRUNCATE);
             output.push_str("...[TRUNCATED]");
@@ -630,13 +728,18 @@ impl UnitTestGrader {
 
     /// Loads the mutation CSV report and extracts surviving mutations.
     async fn load_surviving_mutations(project: &Project) -> Result<Vec<MutationDiagnostic>> {
-        let reports_dir = project.paths().root_dir().join("test_reports");
-        async_fs::create_dir_all(&reports_dir)
+        let csv_path = Self::mutation_report_path(project);
+
+        let reports_dir = csv_path
+            .parent()
+            .ok_or_else(|| anyhow!("Failed to derive parent for {}", csv_path.display()))?;
+
+        async_fs::create_dir_all(reports_dir)
             .await
             .with_context(|| {
                 format!("Failed to create reports directory {}", reports_dir.display())
             })?;
-        let csv_path = reports_dir.join("mutations.csv");
+
         let csv_bytes = async_fs::read(&csv_path)
             .await
             .with_context(|| format!("Could not read {}", csv_path.display()))?;
@@ -645,12 +748,32 @@ impl UnitTestGrader {
         let mut surviving = Vec::new();
         for (index, line) in csv_contents.lines().enumerate() {
             let diag = parser::mutation_report_row(line).with_context(|| {
-                format!("While parsing test_reports/mutations.csv (line {})", index + 1)
+                format!("While parsing {} (line {})", csv_path.display(), index + 1)
             })?;
             if diag.result() == "SURVIVED" {
                 surviving.push(diag);
             }
         }
+
+        // Sort for deterministic ordering across PIT/JVM versions and CSV write order.
+        surviving.sort_by(|a, b| {
+            (
+                a.source_file_name(),
+                a.line_number(),
+                a.source_method(),
+                a.mutator(),
+                a.test_file_name(),
+                a.test_method(),
+            )
+                .cmp(&(
+                    b.source_file_name(),
+                    b.line_number(),
+                    b.source_method(),
+                    b.mutator(),
+                    b.test_file_name(),
+                    b.test_method(),
+                ))
+        });
         Ok(surviving)
     }
 
@@ -733,6 +856,12 @@ impl UnitTestGrader {
 impl UnitTestGrader {
     /// Builds and runs the mutation grader.
     pub async fn run(self) -> Result<GradeResult> {
+        if self.target_test.is_empty() {
+            bail!("UnitTestGrader requires at least one target test class");
+        }
+        if self.target_class.is_empty() {
+            bail!("UnitTestGrader requires at least one target class");
+        }
         self.grade_unit_tests().await
     }
 }

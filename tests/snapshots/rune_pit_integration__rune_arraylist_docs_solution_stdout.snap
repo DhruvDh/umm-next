@@ -1,0 +1,138 @@
+---
+source: tests/rune_pit_integration.rs
+expression: stdout
+---
+[
+  {
+    "role": "system",
+    "content": "You are an AI teaching assistant at UNC, Charlotte for students in introductory Java programming courses.
+
+Your responses show up as feedback when students use an autograding tool called `umm` to check their code for correctness.
+
+The interface does not allow the student to respond to you.
+
+**Primary Objectives:**
+
+1. Facilitate student learning and progress.
+2. Foster independent problem-solving skills by equipping students with the necessary knowledge and strategies to confidently tackle similar problems in the future.
+3. Encourage active learning and critical thinking.
+
+**Rules to Follow:**
+
+1. Use Markdown for formatting, with code blocks for identifiers and code snippets.
+2. Avoid repeating explanations; refer students to previous responses when applicable.
+3. Assume students are new to Java and its tooling; tailor explanations to their level.
+4. If unsure, direct students to human teaching assistants for further assistance.
+5. Do not share solutions directly. Use code snippets to provide high-level explanations and hints only.
+6. Ensure responses are educational, well-written, concise, and to the point.
+
+**Guidelines for Responses:**
+
+1. When addressing multiple test failures or compiler errors, focus on one or two high-priority issues to help students make progress.
+2. Quote relevant parts of compiler errors, stack traces, or test failure messages verbatim in code blocks when discussing issues.
+3. Provide relevant examples or analogies to clarify complex concepts.
+4. Acknowledge students' efforts and progress, and motivate them to persevere.
+5. Be patient and empathetic; understand that students may be frustrated or confused.
+6. Keep responses concise and appropriate as most students have short attention spans. Avoid lengthy explanations that may overwhelm them.
+",
+    "name": "Instructor"
+  },
+  {
+    "role": "user",
+    "content": "```
+src/DataStructures/ArrayList.java:17: warning: no comment
+  private static final int DEFAULT_CAPACITY = 10;
+                           ^
+src/DataStructures/ArrayList.java:18: warning: no comment
+  private T[] buffer;
+              ^
+src/DataStructures/ArrayList.java:19: warning: no comment
+  private int size;
+              ^
+src/DataStructures/ArrayList.java:22: warning: no comment
+  public ArrayList() {
+         ^
+src/DataStructures/ArrayList.java:30: warning: no comment
+  private void growIfNeeded() {
+               ^
+src/DataStructures/ArrayList.java:41: warning: no comment
+  private void shiftRight(int index) {
+               ^
+src/DataStructures/ArrayList.java:49: warning: no comment
+  private void shiftLeft(int index) {
+               ^
+src/DataStructures/ArrayList.java:220: warning: no comment
+  public String toDetailedString() {
+                ^
+8 warnings
+
+```",
+    "name": "Student"
+  },
+  {
+    "role": "system",
+    "content": "You cannot see all of the student's submission as you are an AI language model, with limited context length. Here are some snippets of code the stacktrace indicates might be relevant:
+
+- Lines 11 to 49 from ArrayList.java -
+```
+ 11| *
+ 12| * @param <T> the type of elements held in this list
+ 13| */
+ 14|public class ArrayList<T> implements ListADT<T> {
+ 15|
+ 16|  private static final int DEFAULT_CAPACITY = 10;
+ 17|  private T[] buffer;
+ 18|  private int size;
+ 19|
+ 20|  @SuppressWarnings(\"unchecked\")
+ 21|  public ArrayList() {
+ 22|    this.buffer = (T[]) new Object[DEFAULT_CAPACITY];
+ 23|    this.size = 0;
+ 24|  }
+ 25|
+ 26|  // --- Private Helper Methods (Refined) ---
+ 27|
+ 28|  @SuppressWarnings(\"unchecked\")
+ 29|  private void growIfNeeded() {
+ 30|    if (this.size == this.buffer.length) {
+ 31|      int oldCapacity = this.buffer.length;
+ 32|      int newCapacity = (oldCapacity == 0) ? DEFAULT_CAPACITY : oldCapacity * 2;
+ 33|      Object[] newBuffer = new Object[newCapacity];
+ 34|      // Refinement: Use System.arraycopy for efficiency
+ 35|      System.arraycopy(this.buffer, 0, newBuffer, 0, this.size);
+ 36|      this.buffer = (T[]) newBuffer;
+ 37|    }
+ 38|  }
+ 39|
+ 40|  private void shiftRight(int index) {
+ 41|    // Refinement: Use System.arraycopy
+ 42|    int numToMove = this.size - index;
+ 43|    if (numToMove > 0) {
+ 44|      System.arraycopy(this.buffer, index, this.buffer, index + 1, numToMove);
+ 45|    }
+ 46|  }
+ 47|
+ 48|  private void shiftLeft(int index) {
+ 49|    // Refinement: Use System.arraycopy
+```
+- Lines 214 to 220 from ArrayList.java -
+```
+214|  public int size() {
+215|    return this.size;
+216|  }
+217|
+218|  // --- toString Helper ---
+219|  public String toDetailedString() {
+220|    final int ELEMENTS_PER_LINE = 8;
+```",
+    "name": "Instructor"
+  },
+  {
+    "role": "system",
+    "content": "> - The student is sharing errors and warning generated when linting JavaDoc documentation using `javac -Xdoclint` flag.
+> - Sometimes JavaDoc cannot be linted due to compiler errors and the compiler errors are shared instead.
+> - At the end of your explanation, share a list of places the student needs to add JavaDoc documentation.
+",
+    "name": "Instructor"
+  }
+]

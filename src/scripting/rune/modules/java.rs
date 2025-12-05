@@ -1,16 +1,135 @@
+use std::path::PathBuf;
+
 use rune::{
-    Any, ContextError, Module,
+    Any, ContextError, Module, Ref,
     support::{Error as RuneError, Result as RuneResult},
 };
+use serde_json;
 
 use crate::{
     java::grade::{self, GradeResult as InnerGradeResult},
     scripting::rune::modules::gradescope::GradescopeConfig as RuneGradescopeConfig,
 };
 
+/// Free constructor: discover the current Java project.
+#[rune::function(path = new_project)]
+pub fn new_project() -> RuneResult<Project> {
+    Ok(Project {
+        inner: crate::java::Project::new().map_err(host_err)?,
+    })
+}
+
+/// Free constructor: build a project from explicit paths.
+#[rune::function(path = new_project_from_paths)]
+pub fn new_project_from_paths(paths: ProjectPaths) -> RuneResult<Project> {
+    Ok(Project {
+        inner: crate::java::Project::from_paths(paths.inner).map_err(host_err)?,
+    })
+}
+
+/// Free constructor: start a paths builder for fine-grained overrides.
+/// Defaults mirror `ProjectPaths::from_parts` defaults; callers set only what
+/// they need (e.g., `.lib_dir("...").build()?`).
+#[rune::function(path = new_project_paths)]
+pub fn new_project_paths() -> ProjectPathsBuilder {
+    ProjectPathsBuilder {
+        root_dir:   None,
+        source_dir: None,
+        build_dir:  None,
+        test_dir:   None,
+        lib_dir:    None,
+        umm_dir:    None,
+        report_dir: None,
+    }
+}
+
+/// Free constructor: start building a docs grader.
+#[rune::function(path = new_docs_grader)]
+pub fn new_docs_grader() -> DocsGraderBuilder {
+    DocsGraderBuilder {
+        project:  None,
+        files:    Vec::new(),
+        req_name: None,
+        out_of:   None,
+        penalty:  None,
+    }
+}
+
+/// Free constructor: start building a visible unit-test grader.
+#[rune::function(path = new_by_unit_test_grader)]
+pub fn new_by_unit_test_grader() -> ByUnitTestGraderBuilder {
+    ByUnitTestGraderBuilder {
+        test_files:     Vec::new(),
+        expected_tests: Vec::new(),
+        project:        None,
+        out_of:         None,
+        req_name:       None,
+    }
+}
+
+/// Free constructor: start building a mutation-testing grader.
+#[rune::function(path = new_unit_test_grader)]
+pub fn new_unit_test_grader() -> UnitTestGraderBuilder {
+    UnitTestGraderBuilder {
+        req_name:         None,
+        out_of:           None,
+        project:          None,
+        target_test:      Vec::new(),
+        target_class:     Vec::new(),
+        excluded_methods: Vec::new(),
+        avoid_calls_to:   Vec::new(),
+    }
+}
+
+/// Free constructor: start building a hidden-test grader.
+#[rune::function(path = new_by_hidden_test_grader)]
+pub fn new_by_hidden_test_grader() -> ByHiddenTestGraderBuilder {
+    ByHiddenTestGraderBuilder {
+        url:             None,
+        test_class_name: None,
+        out_of:          None,
+        req_name:        None,
+    }
+}
+
+/// Free constructor: start building a diff grader.
+#[rune::function(path = new_diff_grader)]
+pub fn new_diff_grader() -> DiffGraderBuilder {
+    DiffGraderBuilder {
+        req_name:            None,
+        out_of:              None,
+        project:             None,
+        file:                None,
+        cases:               Vec::new(),
+        ignore_case:         false,
+        preserve_whitespace: false,
+    }
+}
+
+/// Free constructor: start building a query grader.
+#[rune::function(path = new_query_grader)]
+pub fn new_query_grader() -> QueryGraderBuilder {
+    QueryGraderBuilder {
+        req_name:   None,
+        out_of:     None,
+        project:    None,
+        file:       None,
+        queries:    Vec::new(),
+        constraint: None,
+        reason:     None,
+    }
+}
+
+// Convenience constructors live on ProjectPaths for Rune ergonomics.
+
 /// Map host errors into Rune errors with readable messages.
 fn host_err<E: std::fmt::Display>(e: E) -> RuneError {
     RuneError::msg(e.to_string())
+}
+
+/// Helper to extract required builder fields without panicking.
+fn take_required<T>(opt: Option<T>, field: &str) -> RuneResult<T> {
+    opt.ok_or_else(|| host_err(format!("Missing required field: {field}")))
 }
 
 /// Rune-exposed wrapper around the Java `Project` discovery.
@@ -21,13 +140,86 @@ pub struct Project {
     inner: crate::java::Project,
 }
 
-impl Project {
-    #[rune::function(path = Project::new)]
-    /// Discover the current Java project and return a wrapped `Project`.
-    pub fn new() -> RuneResult<Self> {
-        Ok(Self {
-            inner: crate::java::Project::new().map_err(host_err)?,
-        })
+/// Workspace path set bridged into Rune.
+#[derive(Any, Clone)]
+#[rune(item = ::umm::java)]
+pub struct ProjectPaths {
+    /// Underlying Rust `ProjectPaths`.
+    inner: crate::java::ProjectPaths,
+}
+
+/// Builder for `ProjectPaths` with optional overrides.
+#[derive(Any, Clone)]
+#[rune(item = ::umm::java)]
+pub struct ProjectPathsBuilder {
+    /// Project root directory.
+    root_dir:   Option<PathBuf>,
+    /// Source directory (defaults to `root/src`).
+    source_dir: Option<PathBuf>,
+    /// Build output directory (defaults to `root/target`).
+    build_dir:  Option<PathBuf>,
+    /// Test sources directory (defaults to `root/test`).
+    test_dir:   Option<PathBuf>,
+    /// JAR library directory (defaults to `root/lib`).
+    lib_dir:    Option<PathBuf>,
+    /// UMM metadata directory (defaults to `root/.umm`).
+    umm_dir:    Option<PathBuf>,
+    /// Report directory (defaults to `root/test_reports`).
+    report_dir: Option<PathBuf>,
+}
+
+impl ProjectPathsBuilder {
+    /// Override project root.
+    pub fn root_dir(mut self, path: String) -> Self {
+        self.root_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override source directory.
+    pub fn source_dir(mut self, path: String) -> Self {
+        self.source_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override build output directory.
+    pub fn build_dir(mut self, path: String) -> Self {
+        self.build_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override test directory.
+    pub fn test_dir(mut self, path: String) -> Self {
+        self.test_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override library directory.
+    pub fn lib_dir(mut self, path: String) -> Self {
+        self.lib_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override UMM metadata directory.
+    pub fn umm_dir(mut self, path: String) -> Self {
+        self.umm_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override report directory.
+    pub fn report_dir(mut self, path: String) -> Self {
+        self.report_dir = Some(PathBuf::from(path));
+        self
+    }
+
+    /// Build a concrete `ProjectPaths`.
+    pub fn build(self) -> RuneResult<ProjectPaths> {
+        let root = self.root_dir.unwrap_or_else(|| PathBuf::from("."));
+
+        let paths = crate::java::paths::ProjectPaths::from_parts(
+            root,
+            self.source_dir,
+            self.build_dir,
+            self.test_dir,
+            self.lib_dir,
+            self.umm_dir,
+            self.report_dir,
+        );
+
+        Ok(ProjectPaths { inner: paths })
     }
 }
 
@@ -59,6 +251,14 @@ impl GradeResult {
     /// Maximum score for this requirement.
     pub fn out_of(&self) -> f64 {
         self.inner.out_of_value()
+    }
+
+    /// Serialized prompt messages, if present.
+    pub fn prompt(&self) -> Option<String> {
+        self.inner
+            .prompt
+            .as_ref()
+            .and_then(|msgs| serde_json::to_string_pretty(msgs).ok())
     }
 
     /// Consume the wrapper and return the underlying Rust result.
@@ -110,24 +310,12 @@ pub struct DocsGraderBuilder {
     penalty:  Option<f64>,
 }
 
-impl DocsGrader {
-    #[rune::function(path = DocsGrader::builder)]
-    /// Start building a docs grader.
-    pub fn builder() -> DocsGraderBuilder {
-        DocsGraderBuilder {
-            project:  None,
-            files:    Vec::new(),
-            req_name: None,
-            out_of:   None,
-            penalty:  None,
-        }
-    }
-}
+impl DocsGrader {}
 
 impl DocsGraderBuilder {
     /// Set the project to grade.
-    pub fn project(mut self, project: Project) -> Self {
-        self.project = Some(project);
+    pub fn project(mut self, project: Ref<Project>) -> Self {
+        self.project = Some(project.clone());
         self
     }
 
@@ -155,37 +343,21 @@ impl DocsGraderBuilder {
         self
     }
 
-    /// Validate required fields and run the grader.
+    /// Build with bon defaults and run; bon enforces required fields.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.project.is_none() {
-            missing.push("project");
-        }
-        if self.files.is_empty() {
-            missing.push("files");
-        }
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "DocsGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
+        let builder = grade::DocsGrader::builder()
+            .project(take_required(self.project, "project")?.inner)
+            .files(self.files)
+            .req_name(take_required(self.req_name, "req_name")?)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .penalty(self.penalty.unwrap_or(3.0));
 
-        let grader = grade::DocsGrader {
-            project:  self.project.unwrap().inner,
-            files:    self.files,
-            req_name: self.req_name.unwrap(),
-            out_of:   self.out_of.unwrap(),
-            penalty:  self.penalty.unwrap_or(3.0),
-        };
-
-        grader.run().await.map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .await
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -210,20 +382,6 @@ pub struct ByUnitTestGraderBuilder {
     req_name:       Option<String>,
 }
 
-impl ByUnitTestGrader {
-    #[rune::function(path = ByUnitTestGrader::builder)]
-    /// Start building a visible unit-test grader.
-    pub fn builder() -> ByUnitTestGraderBuilder {
-        ByUnitTestGraderBuilder {
-            test_files:     Vec::new(),
-            expected_tests: Vec::new(),
-            project:        None,
-            out_of:         None,
-            req_name:       None,
-        }
-    }
-}
-
 impl ByUnitTestGraderBuilder {
     /// Specify test files to run.
     pub fn test_files(mut self, files: Vec<String>) -> Self {
@@ -238,8 +396,8 @@ impl ByUnitTestGraderBuilder {
     }
 
     /// Attach the project.
-    pub fn project(mut self, project: Project) -> Self {
-        self.project = Some(project);
+    pub fn project(mut self, project: Ref<Project>) -> Self {
+        self.project = Some(project.clone());
         self
     }
 
@@ -257,34 +415,19 @@ impl ByUnitTestGraderBuilder {
 
     /// Run the grader.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.project.is_none() {
-            missing.push("project");
-        }
-        if self.test_files.is_empty() {
-            missing.push("test_files");
-        }
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "ByUnitTestGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
-
         let builder = grade::ByUnitTestGrader::builder()
             .test_files(self.test_files)
             .expected_tests(self.expected_tests)
-            .project(self.project.unwrap().inner)
-            .out_of(self.out_of.unwrap())
-            .req_name(self.req_name.unwrap());
+            .project(take_required(self.project, "project")?.inner)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .req_name(take_required(self.req_name, "req_name")?);
 
-        builder.run().await.map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .await
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -301,6 +444,8 @@ pub struct UnitTestGraderBuilder {
     req_name:         Option<String>,
     /// Maximum score.
     out_of:           Option<f64>,
+    /// Project under test.
+    project:          Option<Project>,
     /// Test classes to run.
     target_test:      Vec<String>,
     /// Classes under mutation.
@@ -311,20 +456,7 @@ pub struct UnitTestGraderBuilder {
     avoid_calls_to:   Vec<String>,
 }
 
-impl UnitTestGrader {
-    #[rune::function(path = UnitTestGrader::builder)]
-    /// Start building a mutation-testing grader.
-    pub fn builder() -> UnitTestGraderBuilder {
-        UnitTestGraderBuilder {
-            req_name:         None,
-            out_of:           None,
-            target_test:      Vec::new(),
-            target_class:     Vec::new(),
-            excluded_methods: Vec::new(),
-            avoid_calls_to:   Vec::new(),
-        }
-    }
-}
+impl UnitTestGrader {}
 
 impl UnitTestGraderBuilder {
     /// Set requirement name.
@@ -335,6 +467,11 @@ impl UnitTestGraderBuilder {
     /// Set maximum score.
     pub fn out_of(mut self, value: f64) -> Self {
         self.out_of = Some(value);
+        self
+    }
+    /// Set the project under test.
+    pub fn project(mut self, project: Ref<Project>) -> Self {
+        self.project = Some(project.clone());
         self
     }
     /// Set target tests.
@@ -360,36 +497,21 @@ impl UnitTestGraderBuilder {
 
     /// Run the mutation-testing grader.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if self.target_test.is_empty() {
-            missing.push("target_test");
-        }
-        if self.target_class.is_empty() {
-            missing.push("target_class");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "UnitTestGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
+        let builder = grade::UnitTestGrader::builder()
+            .target_test(self.target_test)
+            .target_class(self.target_class)
+            .excluded_methods(self.excluded_methods)
+            .avoid_calls_to(self.avoid_calls_to)
+            .req_name(take_required(self.req_name, "req_name")?)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .project(take_required(self.project, "project")?.inner);
 
-        let grader = grade::UnitTestGrader {
-            req_name:         self.req_name.unwrap(),
-            out_of:           self.out_of.unwrap(),
-            target_test:      self.target_test,
-            target_class:     self.target_class,
-            excluded_methods: self.excluded_methods,
-            avoid_calls_to:   self.avoid_calls_to,
-        };
-
-        grader.run().await.map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .await
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -412,18 +534,7 @@ pub struct ByHiddenTestGraderBuilder {
     req_name:        Option<String>,
 }
 
-impl ByHiddenTestGrader {
-    #[rune::function(path = ByHiddenTestGrader::builder)]
-    /// Start building a hidden-test grader.
-    pub fn builder() -> ByHiddenTestGraderBuilder {
-        ByHiddenTestGraderBuilder {
-            url:             None,
-            test_class_name: None,
-            out_of:          None,
-            req_name:        None,
-        }
-    }
-}
+impl ByHiddenTestGrader {}
 
 impl ByHiddenTestGraderBuilder {
     /// Set URL to fetch hidden tests.
@@ -449,34 +560,18 @@ impl ByHiddenTestGraderBuilder {
 
     /// Run the hidden-test grader.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.url.is_none() {
-            missing.push("url");
-        }
-        if self.test_class_name.is_none() {
-            missing.push("test_class_name");
-        }
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "ByHiddenTestGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
+        let builder = grade::ByHiddenTestGrader::builder()
+            .url(take_required(self.url, "url")?)
+            .test_class_name(take_required(self.test_class_name, "test_class_name")?)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .req_name(take_required(self.req_name, "req_name")?);
 
-        let grader = grade::ByHiddenTestGrader {
-            url:             self.url.unwrap(),
-            test_class_name: self.test_class_name.unwrap(),
-            out_of:          self.out_of.unwrap(),
-            req_name:        self.req_name.unwrap(),
-        };
-
-        grader.run().await.map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .await
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -505,21 +600,7 @@ pub struct DiffGraderBuilder {
     preserve_whitespace: bool,
 }
 
-impl DiffGrader {
-    #[rune::function(path = DiffGrader::builder)]
-    /// Start building a diff grader.
-    pub fn builder() -> DiffGraderBuilder {
-        DiffGraderBuilder {
-            req_name:            None,
-            out_of:              None,
-            project:             None,
-            file:                None,
-            cases:               Vec::new(),
-            ignore_case:         false,
-            preserve_whitespace: false,
-        }
-    }
-}
+impl DiffGrader {}
 
 impl DiffGraderBuilder {
     /// Set requirement name.
@@ -533,8 +614,8 @@ impl DiffGraderBuilder {
         self
     }
     /// Attach project.
-    pub fn project(mut self, project: Project) -> Self {
-        self.project = Some(project);
+    pub fn project(mut self, project: Ref<Project>) -> Self {
+        self.project = Some(project.clone());
         self
     }
     /// Set file to run against.
@@ -560,39 +641,21 @@ impl DiffGraderBuilder {
 
     /// Run the diff grader.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.project.is_none() {
-            missing.push("project");
-        }
-        if self.file.is_none() {
-            missing.push("file");
-        }
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if self.cases.is_empty() {
-            missing.push("cases");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "DiffGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
-
         let builder = grade::DiffGrader::builder()
-            .req_name(self.req_name.unwrap())
-            .out_of(self.out_of.unwrap())
-            .project(self.project.unwrap().inner)
-            .file(self.file.unwrap())
+            .req_name(take_required(self.req_name, "req_name")?)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .project(take_required(self.project, "project")?.inner)
+            .file(take_required(self.file, "file")?)
             .cases(self.cases)
             .ignore_case(self.ignore_case)
             .preserve_whitespace(self.preserve_whitespace);
 
-        builder.run().await.map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .await
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -656,21 +719,7 @@ pub struct QueryGraderBuilder {
     reason:     Option<String>,
 }
 
-impl QueryGrader {
-    #[rune::function(path = QueryGrader::builder)]
-    /// Start building a query grader.
-    pub fn builder() -> QueryGraderBuilder {
-        QueryGraderBuilder {
-            req_name:   None,
-            out_of:     None,
-            project:    None,
-            file:       None,
-            queries:    Vec::new(),
-            constraint: None,
-            reason:     None,
-        }
-    }
-}
+impl QueryGrader {}
 
 impl QueryGraderBuilder {
     /// Set requirement name.
@@ -684,8 +733,8 @@ impl QueryGraderBuilder {
         self
     }
     /// Attach project to grade.
-    pub fn project(mut self, project: Project) -> Self {
-        self.project = Some(project);
+    pub fn project(mut self, project: Ref<Project>) -> Self {
+        self.project = Some(project.clone());
         self
     }
     /// Set file to run queries against.
@@ -719,29 +768,6 @@ impl QueryGraderBuilder {
 
     /// Run the query grader.
     pub async fn run(self) -> RuneResult<GradeResult> {
-        let mut missing = Vec::new();
-        if self.req_name.is_none() {
-            missing.push("req_name");
-        }
-        if self.out_of.is_none() {
-            missing.push("out_of");
-        }
-        if self.project.is_none() {
-            missing.push("project");
-        }
-        if self.file.is_none() {
-            missing.push("file");
-        }
-        if self.queries.is_empty() {
-            missing.push("queries");
-        }
-        if !missing.is_empty() {
-            return Err(host_err(format!(
-                "QueryGrader missing required fields: {}",
-                missing.join(", ")
-            )));
-        }
-
         let queries: Vec<grade::Query> = self
             .queries
             .into_iter()
@@ -754,17 +780,21 @@ impl QueryGraderBuilder {
             .collect();
 
         let constraint = self.constraint.map(|c| c.inner).unwrap_or_default();
-
-        let grader = grade::QueryGrader::builder()
-            .req_name(self.req_name.unwrap())
-            .out_of(self.out_of.unwrap())
+        let builder = grade::QueryGrader::builder()
             .queries(queries)
-            .project(self.project.unwrap().inner)
-            .file(self.file.unwrap())
             .constraint(constraint)
             .reason(self.reason.unwrap_or_default());
+        let builder = builder
+            .req_name(take_required(self.req_name, "req_name")?)
+            .out_of(take_required(self.out_of, "out_of")?)
+            .project(take_required(self.project, "project")?.inner)
+            .file(take_required(self.file, "file")?);
 
-        grader.run().map(GradeResult::from).map_err(host_err)
+        builder
+            .build()
+            .run()
+            .map(GradeResult::from)
+            .map_err(host_err)
     }
 }
 
@@ -809,6 +839,8 @@ pub fn module() -> Result<Module, ContextError> {
     module.ty::<Project>()?;
     module.ty::<GradeResult>()?;
     module.ty::<DiffCase>()?;
+    module.ty::<ProjectPaths>()?;
+    module.ty::<ProjectPathsBuilder>()?;
     module.ty::<DocsGrader>()?;
     module.ty::<DocsGraderBuilder>()?;
     module.ty::<ByUnitTestGrader>()?;
@@ -822,10 +854,29 @@ pub fn module() -> Result<Module, ContextError> {
     module.ty::<QueryConstraint>()?;
     module.ty::<QueryGrader>()?;
     module.ty::<QueryGraderBuilder>()?;
+    module.associated_function("prompt", GradeResult::prompt)?;
 
-    module.function_meta(Project::new)?;
+    // Free constructors.
+    module.function_meta(new_project)?;
+    module.function_meta(new_project_from_paths)?;
+    module.function_meta(new_project_paths)?;
+    module.function_meta(new_docs_grader)?;
+    module.function_meta(new_by_unit_test_grader)?;
+    module.function_meta(new_unit_test_grader)?;
+    module.function_meta(new_by_hidden_test_grader)?;
+    module.function_meta(new_diff_grader)?;
+    module.function_meta(new_query_grader)?;
 
-    module.function_meta(DocsGrader::builder)?;
+    // Builder setters.
+    module.associated_function("root_dir", ProjectPathsBuilder::root_dir)?;
+    module.associated_function("source_dir", ProjectPathsBuilder::source_dir)?;
+    module.associated_function("build_dir", ProjectPathsBuilder::build_dir)?;
+    module.associated_function("test_dir", ProjectPathsBuilder::test_dir)?;
+    module.associated_function("lib_dir", ProjectPathsBuilder::lib_dir)?;
+    module.associated_function("umm_dir", ProjectPathsBuilder::umm_dir)?;
+    module.associated_function("report_dir", ProjectPathsBuilder::report_dir)?;
+    module.associated_function("build", ProjectPathsBuilder::build)?;
+
     module.associated_function("project", DocsGraderBuilder::project)?;
     module.associated_function("files", DocsGraderBuilder::files)?;
     module.associated_function("req_name", DocsGraderBuilder::req_name)?;
@@ -833,7 +884,6 @@ pub fn module() -> Result<Module, ContextError> {
     module.associated_function("penalty", DocsGraderBuilder::penalty)?;
     module.associated_function("run", DocsGraderBuilder::run)?;
 
-    module.function_meta(ByUnitTestGrader::builder)?;
     module.associated_function("test_files", ByUnitTestGraderBuilder::test_files)?;
     module.associated_function("expected_tests", ByUnitTestGraderBuilder::expected_tests)?;
     module.associated_function("project", ByUnitTestGraderBuilder::project)?;
@@ -841,23 +891,21 @@ pub fn module() -> Result<Module, ContextError> {
     module.associated_function("req_name", ByUnitTestGraderBuilder::req_name)?;
     module.associated_function("run", ByUnitTestGraderBuilder::run)?;
 
-    module.function_meta(UnitTestGrader::builder)?;
     module.associated_function("req_name", UnitTestGraderBuilder::req_name)?;
     module.associated_function("out_of", UnitTestGraderBuilder::out_of)?;
+    module.associated_function("project", UnitTestGraderBuilder::project)?;
     module.associated_function("target_test", UnitTestGraderBuilder::target_test)?;
     module.associated_function("target_class", UnitTestGraderBuilder::target_class)?;
     module.associated_function("excluded_methods", UnitTestGraderBuilder::excluded_methods)?;
     module.associated_function("avoid_calls_to", UnitTestGraderBuilder::avoid_calls_to)?;
     module.associated_function("run", UnitTestGraderBuilder::run)?;
 
-    module.function_meta(ByHiddenTestGrader::builder)?;
     module.associated_function("url", ByHiddenTestGraderBuilder::url)?;
     module.associated_function("test_class_name", ByHiddenTestGraderBuilder::test_class_name)?;
     module.associated_function("out_of", ByHiddenTestGraderBuilder::out_of)?;
     module.associated_function("req_name", ByHiddenTestGraderBuilder::req_name)?;
     module.associated_function("run", ByHiddenTestGraderBuilder::run)?;
 
-    module.function_meta(DiffGrader::builder)?;
     module.associated_function("req_name", DiffGraderBuilder::req_name)?;
     module.associated_function("out_of", DiffGraderBuilder::out_of)?;
     module.associated_function("project", DiffGraderBuilder::project)?;
@@ -871,7 +919,7 @@ pub fn module() -> Result<Module, ContextError> {
     module.function_meta(QueryConstraint::must_match_exactly_n)?;
     module.function_meta(QueryConstraint::must_not_match)?;
 
-    module.function_meta(QueryGrader::builder)?;
+    // Query grader builder setters.
     module.associated_function("req_name", QueryGraderBuilder::req_name)?;
     module.associated_function("out_of", QueryGraderBuilder::out_of)?;
     module.associated_function("project", QueryGraderBuilder::project)?;

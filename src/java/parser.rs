@@ -25,18 +25,9 @@ fn java_language() -> tree_sitter::Language {
 
 impl Default for Parser {
     fn default() -> Self {
-        let mut parser = tree_sitter::Parser::new();
-        let language = java_language();
-        parser
-            .set_language(&language)
-            .expect("Error loading Java grammar");
-        let tree = parser.parse("", None);
-
-        Self {
-            code:  String::new(),
-            _tree: tree,
-            lang:  language,
-        }
+        // Fall back to the fallible constructor but keep Default for callers
+        // that derive it; panic with context if even the empty parse fails.
+        Parser::new(String::new()).expect("Failed to initialize Java parser with empty source")
     }
 }
 

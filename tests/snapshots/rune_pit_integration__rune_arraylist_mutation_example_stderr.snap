@@ -1,0 +1,17 @@
+---
+source: tests/rune_pit_integration.rs
+expression: stderr
+---
+Running Mutation tests -
+Mutation tests failed; details captured in prompt.
+┌─────────────┬────────────┬─────────────────────────┐
+│                  Grading Overview                  │
+├─────────────┼────────────┼─────────────────────────┤
+│ Requirement │ Grade      │ Reason                  │
+├─────────────┼────────────┼─────────────────────────┤
+│ mutation    │ 0.00/10.00 │ Something went wrong    │
+│             │            │ while running mutation  │
+│             │            │ tests, skipping.        │
+├─────────────┼────────────┼─────────────────────────┤
+│                 Total: 0.00/10.00                  │
+└─────────────┴────────────┴─────────────────────────┘

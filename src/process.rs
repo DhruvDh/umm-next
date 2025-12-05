@@ -26,10 +26,10 @@ impl ChildDropGuard {
     }
 
     /// Returns a mutable reference to the underlying child process.
-    fn child_mut(&mut self) -> &mut Child {
+    fn child_mut(&mut self) -> anyhow::Result<&mut Child> {
         self.0
             .as_mut()
-            .expect("child has already been taken from guard")
+            .context("child process already taken from guard")
     }
 
     /// Prevents the guard from killing the process on drop.
@@ -106,7 +106,7 @@ pub async fn run_collect(
     };
 
     if let Some(bytes) = stdin_payload
-        && let Some(mut handle) = guard.child_mut().stdin.take()
+        && let Some(mut handle) = guard.child_mut()?.stdin.take()
     {
         tokio::spawn(async move {
             if !bytes.is_empty() {
@@ -117,12 +117,12 @@ pub async fn run_collect(
     }
 
     let stdout = guard
-        .child_mut()
+        .child_mut()?
         .stdout
         .take()
         .context("missing stdout pipe")?;
     let stderr = guard
-        .child_mut()
+        .child_mut()?
         .stderr
         .take()
         .context("missing stderr pipe")?;
@@ -150,7 +150,7 @@ pub async fn run_collect(
     let wait_future = async move {
         let mut guard = guard;
         let status = guard
-            .child_mut()
+            .child_mut()?
             .wait()
             .await
             .context("failed to wait on process")?;

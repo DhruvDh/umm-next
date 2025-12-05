@@ -41,7 +41,7 @@ impl Project {
     }
 
     /// Core implementation that discovers files for the provided paths.
-    fn from_paths(paths: ProjectPaths) -> Result<Self> {
+    pub fn from_paths(paths: ProjectPaths) -> Result<Self> {
         // TODO: When a typed Project builder lands, surface custom workspace layouts
         // instead of hard-coding defaults.
         let mut files = vec![];
@@ -64,6 +64,25 @@ impl Project {
             names,
             paths,
         })
+    }
+
+    /// Return a copy of this project with updated workspace paths.
+    ///
+    /// File metadata and cached names are recomputed against the provided paths
+    /// to avoid stale lookups when the workspace layout changes.
+    pub fn with_paths(self, paths: ProjectPaths) -> Self {
+        let files: Vec<File> = self
+            .files
+            .into_iter()
+            .map(|file| file.with_paths(paths.clone()))
+            .collect();
+        let names = files.iter().map(File::proper_name).collect();
+
+        Self {
+            files,
+            names,
+            paths,
+        }
     }
 
     /// Attempts to identify the correct file from the project from a partial or

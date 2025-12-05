@@ -1,9 +1,9 @@
-use umm::java::{Project, DiffGrader, grade_all, show_results};
+use umm::java::{new_project, new_diff_grader, grade_all, show_results};
 
 pub async fn main() {
-    let project = Project::new()?;
+    let project = new_project()?;
 
-    let diff = DiffGrader::builder()
+    let diff = new_diff_grader()
         .project(project)
         .file("Main")
         .req_name("hello")
@@ -13,6 +13,12 @@ pub async fn main() {
         .await?;
 
     let results = grade_all([diff])?;
+    for result in results.clone() {
+        match result.prompt() {
+            Some(prompt) => println!("{prompt}"),
+            None => println!("prompt: <none>"),
+        }
+    }
     show_results(results)?;
     Ok(())
 }

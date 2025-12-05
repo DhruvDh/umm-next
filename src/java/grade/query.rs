@@ -3,7 +3,7 @@
 
 use std::{fmt, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use async_openai::types::chat::ChatCompletionRequestSystemMessageArgs;
 use bon::Builder;
 use snailquote::unescape;
@@ -592,6 +592,9 @@ impl QueryGrader {
 impl QueryGrader {
     /// Builds and runs the query grader.
     pub fn run(self) -> Result<GradeResult> {
+        if self.queries.is_empty() {
+            bail!("QueryGrader requires at least one query");
+        }
         self.grade_by_query()
     }
 }

@@ -1,0 +1,21 @@
+use umm::java::{new_project_from_paths, new_project_paths, new_unit_test_grader, show_results};
+
+pub async fn main() {
+    let paths = new_project_paths()
+        .lib_dir("../../../jar_files")
+        .report_dir("test_reports")
+        .build()?;
+    let project = new_project_from_paths(paths)?;
+
+    let mutation = new_unit_test_grader()
+        .project(project)
+        .req_name("mutation")
+        .out_of(10.0)
+        .target_test(["DataStructures.ArrayListTest"])
+        .target_class(["DataStructures.ArrayList"])
+        .run()
+        .await?;
+
+    show_results([mutation])?;
+    Ok(())
+}

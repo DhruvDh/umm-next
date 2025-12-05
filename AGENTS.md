@@ -16,6 +16,8 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
   statics. Do **not** re-introduce the removed `lazy_static` path constants.
 - Rhai support is being removed. Do not resurrect Rhai helpers; instead push the
   design towards the planned Rune integration.
+- Mutation tests cannot be run inside the Codex sandbox; the user must run them
+  locally to verify pass/fail.
 - For linting/tests: run `cargo fmt` and `cargo clippy --all-targets` before you
   hand back work. Use `cargo check` as needed, but clippy is the minimum bar.
 - Keep Rust test-only logic under `tests/` (integration tests); avoid new

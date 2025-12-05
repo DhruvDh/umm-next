@@ -1,0 +1,25 @@
+use umm::java::{new_project_from_paths, new_project_paths, new_docs_grader, show_results};
+
+pub async fn main() {
+    let paths = new_project_paths()
+        .lib_dir("../../../jar_files")
+        .report_dir("test_reports")
+        .build()?;
+    let project = new_project_from_paths(paths)?;
+
+    let docs = new_docs_grader()
+        .project(project)
+        .files(["ArrayList"])
+        .req_name("docs")
+        .out_of(5.0)
+        .run()
+        .await?;
+
+    match docs.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([docs])?;
+    Ok(())
+}

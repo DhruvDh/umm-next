@@ -14,7 +14,7 @@
 //!
 //! Once you are done, just type `cargo install --git=https://github.com/DhruvDh/umm.git` and it should compile and install it on your system.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bpaf::*;
 use dotenvy::dotenv;
 use self_update::cargo_crate_version;
@@ -208,9 +208,7 @@ async fn run_cli() -> Result<()> {
                 println!("{out}");
             }
             JavaCmd::Grade(g) => {
-                scripting::run_file(&g)
-                    .await
-                    .with_context(|| format!("Failed to execute Rune script `{}`", g))?;
+                scripting::run_file(&g).await?;
             }
             JavaCmd::Info => Project::new()?.info()?,
         },

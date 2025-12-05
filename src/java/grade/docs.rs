@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
@@ -198,6 +198,9 @@ impl DocsGrader {
 impl DocsGrader {
     /// Builds and runs the documentation grader.
     pub async fn run(self) -> Result<GradeResult> {
+        if self.files.is_empty() {
+            bail!("DocsGrader requires at least one file to grade");
+        }
         self.grade_docs().await
     }
 }

@@ -1,0 +1,149 @@
+---
+source: tests/rune_pit_integration.rs
+expression: stderr
+---
+Running Mutation tests -
+Ran mutation tests for DataStructures.ArrayListTest -
+Problematic mutation test failures printed above.
+-[ RECORD 0 ]---------+------------------------------------
+Mutation type         | RemoveConditionalMutator_EQUAL_IF
+Source method mutated | growIfNeeded
+Line no. of mutation  | 31
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 1 ]---------+------------------------------------
+Mutation type         | RemoveConditionalMutator_EQUAL_ELSE
+Source method mutated | growIfNeeded
+Line no. of mutation  | 33
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 2 ]---------+------------------------------------
+Mutation type         | MathMutator
+Source method mutated | shiftRight
+Line no. of mutation  | 43
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 3 ]---------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | shiftRight
+Line no. of mutation  | 44
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 4 ]---------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | shiftRight
+Line no. of mutation  | 44
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 5 ]---------+------------------------------------
+Mutation type         | MathMutator
+Source method mutated | shiftLeft
+Line no. of mutation  | 51
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 6 ]---------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | shiftLeft
+Line no. of mutation  | 52
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 7 ]---------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | shiftLeft
+Line no. of mutation  | 52
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 8 ]---------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | add
+Line no. of mutation  | 64
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 9 ]---------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | add
+Line no. of mutation  | 68
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 10 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | add
+Line no. of mutation  | 68
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 11 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_EQUAL_ELSE
+Source method mutated | addAfter
+Line no. of mutation  | 89
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 12 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | remove
+Line no. of mutation  | 121
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 13 ]--------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | remove
+Line no. of mutation  | 125
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 14 ]--------+------------------------------------
+Mutation type         | MathMutator
+Source method mutated | remove
+Line no. of mutation  | 125
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 15 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | remove
+Line no. of mutation  | 125
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 16 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | get
+Line no. of mutation  | 162
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 17 ]--------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | set
+Line no. of mutation  | 173
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 18 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | set
+Line no. of mutation  | 173
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 19 ]--------+------------------------------------
+Mutation type         | ConditionalsBoundaryMutator
+Source method mutated | clear
+Line no. of mutation  | 197
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 20 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_ELSE
+Source method mutated | clear
+Line no. of mutation  | 197
+Test examined         | None
+Result                | SURVIVED
+-[ RECORD 21 ]--------+------------------------------------
+Mutation type         | RemoveConditionalMutator_ORDER_IF
+Source method mutated | clear
+Line no. of mutation  | 197
+Test examined         | None
+Result                | SURVIVED
+┌─────────────┬────────────┬─────────────────────┐
+│                Grading Overview                │
+├─────────────┼────────────┼─────────────────────┤
+│ Requirement │ Grade      │ Reason              │
+├─────────────┼────────────┼─────────────────────┤
+│ mutation    │ 0.00/10.00 │ -88 Penalty due to  │
+│             │            │ surviving mutations │
+├─────────────┼────────────┼─────────────────────┤
+│               Total: 0.00/10.00                │
+└─────────────┴────────────┴─────────────────────┘

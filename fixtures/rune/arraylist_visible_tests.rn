@@ -1,0 +1,25 @@
+use umm::java::{new_project_from_paths, new_project_paths, new_by_unit_test_grader, show_results};
+
+pub async fn main() {
+    let paths = new_project_paths()
+        .lib_dir("../../../jar_files")
+        .report_dir("test_reports")
+        .build()?;
+    let project = new_project_from_paths(paths)?;
+
+    let visible = new_by_unit_test_grader()
+        .project(project)
+        .test_files(["DataStructures.ArrayListTest"])
+        .req_name("visible-tests")
+        .out_of(20.0)
+        .run()
+        .await?;
+
+    match visible.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([visible])?;
+    Ok(())
+}

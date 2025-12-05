@@ -1,8 +1,9 @@
-#![allow(deprecated)]
-
 use std::{fs, path::PathBuf};
 
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
+
+#[path = "rune_support.rs"]
+mod rune_support;
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -17,7 +18,7 @@ fn project_dir(name: &str) -> PathBuf {
 }
 
 fn run_script(script: &str, workdir: &str) -> (String, String) {
-    let mut cmd = Command::cargo_bin("umm").expect("binary exists");
+    let mut cmd = cargo_bin_cmd!("umm");
     let script_path = rune_script(script);
     cmd.current_dir(project_dir(workdir))
         .env("CLICOLOR", "0")
@@ -27,9 +28,28 @@ fn run_script(script: &str, workdir: &str) -> (String, String) {
 
     let assert = cmd.assert().success();
     let output = assert.get_output().clone();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = normalize_timestamps(rune_support::normalize_rune_output(
+        String::from_utf8_lossy(&output.stdout).to_string(),
+    ));
+    let stderr = normalize_timestamps(rune_support::normalize_rune_output(
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ));
     (stdout, stderr)
+}
+
+/// PIT prints wall-clock times; scrub them so snapshots stay stable.
+fn normalize_timestamps(input: String) -> String {
+    input
+        .lines()
+        .map(|line| {
+            if let Some((_, rest)) = line.split_once("PIT >> INFO") {
+                format!("TIME PIT >> INFO{}", rest)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -41,7 +61,7 @@ fn rune_happy_path() {
 
 #[test]
 fn rune_missing_required() {
-    let mut cmd = Command::cargo_bin("umm").expect("binary exists");
+    let mut cmd = cargo_bin_cmd!("umm");
     let script_path = rune_script("missing_required.rn");
     cmd.current_dir(project_dir("rune-hello"))
         .env("CLICOLOR", "0")
@@ -63,7 +83,7 @@ fn rune_gradescope_json() {
     let results_path = workdir.join("results.json");
     let _ = fs::remove_file(&results_path);
 
-    let mut cmd = Command::cargo_bin("umm").expect("binary exists");
+    let mut cmd = cargo_bin_cmd!("umm");
     let script_path = rune_script("gradescope_json.rn");
     cmd.current_dir(&workdir)
         .env("CLICOLOR", "0")
@@ -84,4 +104,11 @@ fn rune_query_grader() {
     let (stdout, stderr) = run_script("query.rn", "rune-hello");
     insta::assert_snapshot!("rune_query_stdout", stdout);
     insta::assert_snapshot!("rune_query_stderr", stderr);
+}
+
+#[test]
+fn rune_query_constraints() {
+    let (stdout, stderr) = run_script("query_constraints.rn", "query-cases");
+    insta::assert_snapshot!("rune_query_constraints_stdout", stdout);
+    insta::assert_snapshot!("rune_query_constraints_stderr", stderr);
 }

@@ -1,0 +1,17 @@
+use umm::java::{new_project, new_query_grader, QueryConstraint, show_results};
+
+pub async fn main() {
+    let project = new_project()?;
+    let grader = new_query_grader()
+        .project(project)
+        .file("query.Example")
+        .queries_with_capture([("(method_invocation (identifier) @body)", "body")])
+        .constraint(QueryConstraint::must_match_exactly_n(3))
+        .out_of(5.0)
+        .req_name("query")
+        .run()
+        .await?;
+
+    show_results([grader])?;
+    Ok(())
+}

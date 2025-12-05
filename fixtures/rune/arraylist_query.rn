@@ -1,0 +1,27 @@
+use umm::java::{new_project_from_paths, new_project_paths, new_query_grader, show_results};
+
+pub async fn main() {
+    let paths = new_project_paths()
+        .lib_dir("../../../jar_files")
+        .report_dir("test_reports")
+        .build()?;
+    let project = new_project_from_paths(paths)?;
+
+    let query = new_query_grader()
+        .project(project)
+        .file("DataStructures/ArrayList")
+        .req_name("query-body-present")
+        .out_of(5.0)
+        .queries_with_capture([("((method_declaration) @body)", "body")])
+        .reason("Expect at least one method body in ArrayList")
+        .run()
+        .await?;
+
+    match query.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([query])?;
+    Ok(())
+}

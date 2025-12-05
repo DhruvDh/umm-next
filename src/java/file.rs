@@ -80,6 +80,17 @@ fn normalize_stacktrace_line(line: &str) -> String {
     line.replace("\\\\", "\\").replace("\\\"", "\"")
 }
 
+/// Safely extracts a UTF-8 file name, returning a contextual error on failure.
+fn file_name_utf8(path: &Path) -> Result<String> {
+    let name = path
+        .file_name()
+        .with_context(|| format!("Path has no final component: {}", path.display()))?;
+    let utf8 = name
+        .to_str()
+        .with_context(|| format!("File name is not valid UTF-8: {}", path.display()))?;
+    Ok(utf8.to_string())
+}
+
 /// Detects JUnit method selector resolution failures (common with @Nested
 /// tests).
 fn is_method_selector_resolution_error(output: &str) -> bool {
@@ -504,6 +515,12 @@ impl From<DecodeOutputError> for JavaFileError {
 }
 
 impl File {
+    /// Returns a copy of this file that uses the provided workspace paths.
+    pub fn with_paths(mut self, paths: ProjectPaths) -> Self {
+        self.paths = paths;
+        self
+    }
+
     /// Builds the standard set of `javac` arguments for this file.
     fn javac_args(&self, include_doclint: bool, prefer_source: bool) -> Result<Vec<OsString>> {
         let mut args = vec![
@@ -660,7 +677,7 @@ impl File {
 
         Ok(Self {
             path: path.to_owned(),
-            file_name: path.file_name().unwrap().to_str().unwrap().to_string(),
+            file_name: file_name_utf8(path.as_path())?,
             package_name,
             imports,
             name,

@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::{collections::HashSet, ffi::OsString, path::PathBuf};
 
 use anyhow::{Context, Result};
 use which::which;
@@ -22,17 +22,27 @@ pub fn java_path() -> Result<OsString> {
 
 /// Find class and jar files to populate the classpath.
 pub fn classpath(paths: &ProjectPaths) -> Result<String> {
-    let mut entries: Vec<String> = vec![
-        paths.lib_dir().display().to_string(),
-        paths.build_dir().display().to_string(),
-    ];
+    // Order matters for classpath resolution; build the list deterministically
+    // and deduplicate while preserving the first occurrence.
+    let mut entries: Vec<String> = Vec::new();
 
-    entries.append(
-        &mut find_files("jar", 4, paths.root_dir())?
+    // 1) Compiled classes.
+    entries.push(paths.build_dir().display().to_string());
+
+    // 2) Project-local jars and wildcards under `lib/`.
+    entries.push(paths.lib_dir().display().to_string());
+    entries.push(paths.lib_dir().join("*").display().to_string());
+
+    // 3) Jar discovery under lib (keep the scan shallow to avoid long walks).
+    entries.extend(
+        find_files("jar", 2, paths.lib_dir())?
             .iter()
-            .map(|p| p.as_path().display().to_string())
-            .collect(),
+            .map(|p| p.as_path().display().to_string()),
     );
+
+    // Deduplicate without disturbing order.
+    let mut seen = HashSet::new();
+    entries.retain(|entry| seen.insert(entry.clone()));
 
     Ok(entries.join(paths.separator()))
 }

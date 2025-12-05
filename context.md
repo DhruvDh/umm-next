@@ -3,8 +3,9 @@
 > **Status — Updated 2025-12-04**
 >
 > - **CLI `grade`:** Runs Rune scripts via `scripting::run_file` with installed `umm::{java, gradescope, config, retrieval}` modules; expects `async fn main()` returning `Result<()>` (type annotation optional).
-> - **Scripting:** Rune bindings now expose state-erased grader builders, Gradescope config/helpers, and config/retrieval toggles. Python bindings (embedded runtime) remain branch-only on `try-python-scripting`.
+> - **Scripting:** Rune bindings expose state-erased grader builders, Gradescope config/helpers, config/retrieval toggles, and a `ProjectPaths` builder + `Project::from_paths` for custom layouts. Python bindings (embedded runtime) remain branch-only on `try-python-scripting`.
 > - **Rhai:** Entry flow removed; residual types compile but are inert without the Rhai entrypoint.
+> - **Integration:** ArrayList Rune fixture (`fixtures/rune/arraylist_all.rn`) exercises all graders (hidden tests commented); snapshots captured in `tests/rune_integration.rs`. Mutation grader currently fails under Java 21 due to PIT’s classfile support (see Known Gaps).
 > - **Module layout:** Java sources live under `src/java/*`; configuration and prompts live in `src/config.rs`; `src/constants.rs` is intentionally empty.
 > - **Active retrieval toggle:** Managed with an `std::sync::atomic::AtomicBool` stored in `config::ConfigState`.
 > - **Builders:** `bon 3.8` replaced the remaining `typed-builder` surfaces across graders/DTOs; builder getters enabled for inspection; list setters accept iterables via custom `with` closures; overwrite remains disallowed.
@@ -232,6 +233,7 @@
 ## Design Rationale & Invariants
 
 - Paths must remain instance-scoped; avoid reintroducing globals.
+- Graders executed from Rune must be given an explicit `Project`; implicit discovery (`Project::new()`) is not used on the Rune path.
 - `grade` executes Rune scripts with `umm` modules installed; keep the scripting namespace stable (`umm::java::...`) and builder wrappers state-erased.
 - Query grader wrappers default captures to `"body"` and expose `queries_with_capture(...)` so Rune scripts can pass captures explicitly without tripping `NoCaptureSelected`.
 - Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
@@ -322,6 +324,7 @@ Recent Cleanups (reference)
 - Determine packaging strategy for any embedded runtime (CI, distribution, cross-platform story).
 - Expand retrieval configuration exposure (builder-style overrides for heuristics and endpoints).
 - Track outstanding PEG/parser refactors needed before Rune work resumes.
+- PIT mutation grader fails on the ArrayList fixtures when compiled with Java 21 (class file major 65). Requires either pinning compilation to Java 17 or upgrading the bundled PIT jars; snapshots currently capture the failure output.
 - Diff Grader Modernization — Detailed Notes
   - Status: initial clean-up applied — guards use logical `&&`, prompts route through `build_context_message` with user/system roles fixed, plain-text prompt bodies append the offending file’s source, diff failures surface an actionable reason, and stdin is always piped to avoid blocking.
   - Rationale: `src/java/grade/diff.rs` predates the new retrieval/context APIs and still couples UI concerns (ANSI colors) to prompts while depending on Rhai containers. Modernizing it improves correctness, consistency across graders, and unblocks the Rhai removal.
@@ -448,7 +451,9 @@ rg -n "Module Map|Current Module Layout|Project File Map" context.md
 ## Doc Change Log
 
 - 2025-12-04: Rune surface tightened: QueryGrader wrapper now sets captures (or accepts `queries_with_capture`), avoiding runtime `NoCaptureSelected`; added Rune fixtures/snapshots (happy, missing_required, gradescope_json, query) and refreshed task/report/tutorial accordingly.
+- 2025-12-04: Classpath construction made deterministic (ordered build/lib/wildcard + shallow jar scans with stable dedupe); `Project::with_paths` now rebuilds file/name caches; Rune graders require explicit `Project` injection.
 - 2025-12-04: Replaced remaining `typed-builder` usage with `bon` (3.8.1); enabled builder getters, iterable setters, and `bon::vec!` helpers; added smoke tests for builder ergonomics and refreshed README to point Rune users at the bon builder surface.
+- 2025-12-05: Centralized `ProjectPaths` defaults (single helper for new/from_parts/builder) and exposed `report_dir`; Rune module now leans on bon builders instead of hand-written required-field lists; PIT argument/report helpers shared with tests + trimmed PIT Rune snapshots (kept one success + one failure path).
 - 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
   `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped
   config prompts under a `JavaConfig` bundle (`java_prompts()` accessor retained);

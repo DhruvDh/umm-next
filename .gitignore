@@ -15,3 +15,6 @@ target
 # Untrack PLAN doc
 PLAN.md
 fixtures/java/rune-hello/results.json
+**/.umm/test_reports
+**/.umm
+fixtures/java/*/test_reports

@@ -110,6 +110,31 @@ impl MutationDiagnostic {
     pub fn result(&self) -> &str {
         self.result.as_str()
     }
+
+    /// Source file containing the mutated line.
+    pub fn source_file_name(&self) -> &str {
+        &self.source_file_name
+    }
+    /// Method in the source where the mutation was applied.
+    pub fn source_method(&self) -> &str {
+        &self.source_method
+    }
+    /// Line number of the mutation in the source file.
+    pub fn line_number(&self) -> u32 {
+        self.line_number
+    }
+    /// Test file that exercised (or missed) the mutation.
+    pub fn test_file_name(&self) -> &str {
+        &self.test_file_name
+    }
+    /// Test method that exercised (or missed) the mutation.
+    pub fn test_method(&self) -> &str {
+        &self.test_method
+    }
+    /// Mutator identifier responsible for the mutation.
+    pub fn mutator(&self) -> &str {
+        &self.mutator
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

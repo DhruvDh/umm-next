@@ -31,142 +31,144 @@ Once you are done, just type `cargo install --git=https://github.com/DhruvDh/umm
 
 `umm` now runs grading flows written in [Rune](https://rune-rs.github.io/). Ship a script with an async `main` function and execute it with `umm java grade path/to/script.rn`. A minimal example lives in `examples/sample.rn`.
 
-The Rune surface now leans on the [`bon`](https://docs.rs/bon) builders exposed from the Rust graders (e.g., `DocsGrader::builder().project(...).files([...]).run().await?`). See `examples/sample.rn` for the canonical shape. The notes below document the legacy Rhai prototype and will be updated as the Rune API settles. **We do not currently register additional Rust helper functions into Rune beyond the graders’ builder surfaces.**
+The Rune surface leans on the [`bon`](https://docs.rs/bon) builders exposed from the Rust graders (e.g., `DocsGrader::builder().project(...).files([...]).run().await?`). See `examples/sample.rn` for the canonical shape. **We do not currently register additional Rust helper functions into Rune beyond the graders’ builder surfaces.**
 
-### Introduction
-
-Rhai is a lightweight embeddable scripting language meant to make it easy to use your Rust-written structs, their methods, and your functions dynamically without the need for recompilation.
-
-Here are some structs (classes) to help you get going -
+Here are the currently exposed helpers:
 > **This is an in-progress draft.**
-> 
-> `method_name(arguement_types) -> return_type`
+>
+> `method_name(argument_types) -> return_type`
 
-- `JavaProject` - Struct representing a Java project.
-  - `new_java_project() -> JavaProject` - initializes a java project by discovering files in the source path directory. Also downloads jar files if needed.
-  - `identify(String) -> JavaFile`  -  attempts to identify the correct file from the project from a partial or fully formed name as expected by a java compiler. Returns a `JavaFile` of the identified file in the project.
-  - `files() -> Array` - returns an array of `JavaFiles` discovered in the project
-  - `info()` - prints a minified JSON representation of all the files in the project
+- `ProjectPaths` — workspace layout helper.
+  - `new_project_paths()` -> `ProjectPathsBuilder` with setters `root_dir`, `source_dir`, `build_dir`, `test_dir`, `lib_dir`, `umm_dir`, `report_dir`, and `build()`.
 
-- `JavaFile` - a file in the discovered project representing any class, interface, or test.
-  - `new_java_file() -> JavaFile` - a constructor, is not meant to be used inside a script. `JavaFile`s should be discovered by the project.
-  - `check()` - checks for compiler errors, and reports them on stdout/stderr. Also ensures a corresponding `.class` file is present in the target directory after a `check()` completes.
-  - `doc_check() -> String` - asks javac for documentation lints using the `-Xdoclint` flag. Returns compiler output as a String. There is a parser that can help parse this output which is not currently exposed.
-  - `run()` - runs the file, and prints output to stdout/stderr.
-  - `query(String) -> Array` -> accepts a Treesitter query as a string (use backticks for multiline strings), and returns an Array of [Object Maps](https://rhai.rs/book/language/object-maps.html) (dictionary). Each element of the array represents one match, and each object map contains captured variable names as the key, and captured values as the value.
-  - `test(Array) -> String` - Can be called on JUnit test files. It takes in an Array of strings representing test method names. These test methods must exist within this test file. Returns output from JUnit as a string.
-  - `kind() -> JavaFileType` - returns the kind of file (Class, Interface, ClassWithMain, Test)
-  - `file_name() -> String` - returns the name of the file.
-  - `path() -> String` - returns the relative path to the file as a string.
-  - `test_methods() -> Array` - Can be called on JUnit test files. It returns an Array of test_method names discovered in the file.
+- `Project` — discovered Java workspace.
+  - `new_project() -> Project` — discovers files under the default layout.
+  - `new_project_from_paths(ProjectPaths) -> Project` — uses explicit paths.
+  - `info()` — prints a JSON description of the project.
 
-- `JavaParser` - a wrapper around a treesitter parser. There should not be a need to use this, most of the time what you want to do is call `query()` on a `JavaFile`.
-  - `new_java_parser()` - a constructor, not meant to be used inside a script. It is ideal if you use `JavaFile`'s `query()`.
-  - `code() -> String` - returns the source code the parser is working with.
-  - `set_code(String)` - a setter for the source code the parser is working with.
-  - `query(String) -> Vec<Dict>` - Currently this method returns a value that cannot be used inside a rhai script, please use `JavaFile`'s `query(String)` instead.
+- Graders (all are async; call `.run().await?`):
+  - `new_docs_grader()` — `.project(...)`, `.files([...])`, `.req_name(...)`, `.out_of(...)`, optional `.penalty(...)`.
+  - `new_by_unit_test_grader()` — `.project(...)`, `.test_files([...])`, `.expected_tests([...])`, `.req_name(...)`, `.out_of(...)`.
+  - `new_unit_test_grader()` — `.project(...)`, `.target_test([...])`, `.target_class([...])`, `.excluded_methods([...])`, `.avoid_calls_to([...])`, `.req_name(...)`, `.out_of(...)`.
+  - `new_by_hidden_test_grader()` — `.url(...)`, `.test_class_name(...)`, `.req_name(...)`, `.out_of(...)`.
+  - `new_diff_grader()` — `.project(...)`, `.file("Main")`, `.cases([(expected, Option::<&str>::None)])`, optional `.ignore_case(...)` / `.preserve_whitespace(...)`, `.req_name(...)`, `.out_of(...)`.
+  - `new_query_grader()` — `.project(...)`, `.file(...)`, `.queries_with_capture([(query, capture)])` or `.queries([...])`, `.constraint(QueryConstraint::...)`, `.reason(...)`, `.req_name(...)`, `.out_of(...)`.
 
-- `Grade` - A struct representing a grade.
-  - `new_grade(float, float) -> Grade` - takes the actual grade received, and the maximum grade as floating point numbers, and returns a `Grade`.
-  - `from_string(String) -> Grade` - takes a string in this format - `"80/100"` and returns a new `Grade`.
-  - `grade() -> float` - a getter for the grade recieved.
-  - `grade(float)` - a setter for the grade received.
-  - `out_of() -> float` - a getter for the maximum grade.
-  - `out_of(float)` a setter for the maximum grade.
-  - `to_string()` - returns the grade in this format as a string - `"80/100"`.
+- Results and helpers
+  - `grade_all([GradeResult]) -> Vec<GradeResult>` — combine grader outputs.
+  - `show_results(Vec<GradeResult>)` — render Gradescope-style output.
+  - `GradeResult::prompt()` — returns serialized prompt JSON when present.
+
+Run mutation testing outside the Codex sandbox to confirm pass/fail.
 
 ### Sample grading script
 
 This script is a sample. The script uses several graders, each with its specific function, to evaluate the project and assign a grade.
 
-The first grader, `new_docs_grader()`, is used to evaluate the project's documentation. It takes the project as input, as well as a list of files to be graded, and assigns a grade out of 10 points, with a penalty of 3 points for poor documentation.
+The first grader, `new_docs_grader()`, is used to evaluate the project's documentation. It takes the project as input, as well as a list of files to be graded, and assigns a grade out of 5 points, with a penalty of 1 point for poor documentation.
 
-The second grader, `new_by_unit_test_grader()`, is used to evaluate the project's unit tests. It takes the project, a list of test files, and a list of expected tests as input, and assigns a grade out of 20 points.
+The second grader, `new_diff_grader()`, runs the student's program and checks stdout against an expected string.
 
-The third grader, `new_unit_test_grader()`, is also used to evaluate the project's unit tests. It takes different inputs than the second grader, such as the names of the target test and class, and a list of excluded methods and avoided calls. It also assigns a grade out of 20 points.
+The third grader, `new_by_unit_test_grader()`, runs visible JUnit tests and checks that expected tests are present.
 
-The fourth and fifth graders are similar to the first and second graders but are used to evaluate a different set of files and tests.
+The fourth grader, `new_query_grader()`, runs a tree-sitter query to ensure the source contains a loop.
 
-The sixth grader, `new_by_hidden_test_grader()`, is used to evaluate the project's performance on hidden tests. It takes the URL of the hidden test files, the name of the test class, and the requirements it is grading and assigns a grade out of 30 points.
+The fifth grader, `new_unit_test_grader()`, runs mutation tests (PIT) against selected targets.
+
+The sixth grader, `new_by_hidden_test_grader()`, runs hidden JUnit tests fetched from a URL.
 
 ```rust
-let project = new_java_project();
+use umm::java::{
+    grade_all,
+    new_by_hidden_test_grader,
+    new_by_unit_test_grader,
+    new_diff_grader,
+    new_docs_grader,
+    new_project,
+    new_query_grader,
+    new_unit_test_grader,
+    show_results,
+};
 
-let req_1 = new_docs_grader()
-    .project(project)
-    .files(["pyramid_scheme.LinkedTree"])
-    .out_of(10.0)
-    .req_name("1")
-    .penalty(3.0)
-    .run();
+pub async fn main() {
+    let project = new_project()?;
 
-let req_2 = new_by_unit_test_grader()
-    .project(project)
-    .test_files(["pyramid_scheme.LinkedTreeTest"])
-    .expected_tests([
-        "pyramid_scheme.LinkedTreeTest#testGetRootElement",
-        "pyramid_scheme.LinkedTreeTest#testAddChild",
-        "pyramid_scheme.LinkedTreeTest#testFindNode",
-        "pyramid_scheme.LinkedTreeTest#testContains",
-        "pyramid_scheme.LinkedTreeTest#testSize",
-    ])
-    .out_of(20.0)
-    .req_name("2")
-    .run();
+    let req_1 = new_docs_grader()
+        .project(project.clone())
+        .files(["pyramid_scheme.LinkedTree"])
+        .out_of(5.0)
+        .req_name("1")
+        .penalty(1.0)
+        .run()
+        .await?;
 
-let req_3 = new_unit_test_grader()
-    .req_name("2")
-    .out_of(20.0)
-    .target_test(["pyramid_scheme.LinkedTreeTest"])
-    .target_class(["pyramid_scheme.LinkedTree"])
-    .excluded_methods([])
-    .avoid_calls_to([])
-    .run();
+    let req_2 = new_diff_grader()
+        .project(project.clone())
+        .file("Main")
+        .req_name("2")
+        .out_of(5.0)
+        .cases([("Hello from Rune\n", None)])
+        .run()
+        .await?;
 
-let req_4 = new_docs_grader()
-    .project(project)
-    .files(["pyramid_scheme.PyramidScheme"])
-    .out_of(10.0)
-    .req_name("3")
-    .penalty(3.0)
-    .run();
+    let req_3 = new_by_unit_test_grader()
+        .project(project.clone())
+        .test_files(["pyramid_scheme.LinkedTreeTest"])
+        .expected_tests([
+            "pyramid_scheme.LinkedTreeTest#testGetRootElement",
+            "pyramid_scheme.LinkedTreeTest#testAddChild",
+            "pyramid_scheme.LinkedTreeTest#testFindNode",
+            "pyramid_scheme.LinkedTreeTest#testContains",
+            "pyramid_scheme.LinkedTreeTest#testSize",
+        ])
+        .out_of(5.0)
+        .req_name("3")
+        .run()
+        .await?;
 
-let req_5 = new_by_unit_test_grader()
-    .project(project)
-    .test_files(["pyramid_scheme.PyramidSchemeTest"])
-    .expected_tests([
-        "pyramid_scheme.PyramidSchemeTest#testWhoBenefits",
-        "pyramid_scheme.PyramidSchemeTest#testAddChild",
-        "pyramid_scheme.PyramidSchemeTest#testInitiateCollapse",
-    ])
-    .out_of(30.0)
-    .req_name("3")
-    .run();
+    let req_4 = new_query_grader()
+        .project(project.clone())
+        .file("Main")
+        .queries_with_capture([("((for_statement) @loop)", "loop")])
+        .out_of(5.0)
+        .req_name("4")
+        .reason("Should contain a for loop")
+        .run()
+        .await?;
 
-let req_6 = new_by_hidden_test_grader()
-    .url("https://www.dropbox.com/s/47jd1jru1f1i0cc/ABCTest.java?raw=1")
-    .test_class_name("ABCTest")
-    .out_of(30.0)
-    .req_name("4")
-    .run();
+    let req_5 = new_unit_test_grader()
+        .project(project.clone())
+        .target_test(["pyramid_scheme.LinkedTreeTest"])
+        .target_class(["pyramid_scheme.LinkedTree"])
+        .excluded_methods([])
+        .avoid_calls_to([])
+        .req_name("5")
+        .out_of(5.0)
+        .run()
+        .await?;
 
-let reqs = [req_1, req_2, req_3, req_4, req_5, req_6];
+    let req_6 = new_by_hidden_test_grader()
+        .url("https://www.dropbox.com/s/47jd1jru1f1i0cc/ABCTest.java?raw=1")
+        .test_class_name("ABCTest")
+        .out_of(5.0)
+        .req_name("6")
+        .run()
+        .await?;
 
-// arguements: 
-// - array of grade results
-show_results(reqs);
+    let reqs = grade_all([req_1, req_2, req_3, req_4, req_5, req_6])?;
 
-let total = 0.0;
-let out_of = 0.0;
-for req in reqs {
-    total = total + req.grade();
-    out_of = out_of + req.out_of();
-}
+    show_results(reqs.clone())?;
 
-if total > (0.7 * out_of) {
-    print("p;" + total.to_int())
-} else {
-    print("np")
+    let total: f64 = reqs.iter().map(|r| r.score()).sum();
+    let out_of: f64 = reqs.iter().map(|r| r.out_of()).sum();
+
+    if total > 0.7 * out_of {
+        println!("p;{}", total as i64);
+    } else {
+        println!("np");
+    }
+
+    Ok(())
 }
 ```
 ### Output 

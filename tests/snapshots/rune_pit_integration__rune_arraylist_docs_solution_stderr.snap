@@ -1,0 +1,44 @@
+---
+source: tests/rune_pit_integration.rs
+expression: stderr
+---
+┌──────────────────────────┬──────┬────────────┐
+│         Check javadoc for ArrayList          │
+├──────────────────────────┼──────┼────────────┤
+│ File                     │ Line │ Message    │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 17   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 18   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 19   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 22   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 30   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 41   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 49   │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│ ./src/DataStructures/Arr │ 220  │ no comment │
+│ ayList.java              │      │            │
+├──────────────────────────┼──────┼────────────┤
+│              -24 due to 8 nits               │
+└──────────────────────────┴──────┴────────────┘
+┌─────────────┬───────────┬────────────┐
+│           Grading Overview           │
+├─────────────┼───────────┼────────────┤
+│ Requirement │ Grade     │ Reason     │
+├─────────────┼───────────┼────────────┤
+│ docs        │ 0.00/5.00 │ See above. │
+├─────────────┼───────────┼────────────┤
+│           Total: 0.00/5.00           │
+└─────────────┴───────────┴────────────┘

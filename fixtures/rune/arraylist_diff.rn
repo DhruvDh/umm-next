@@ -1,0 +1,26 @@
+use umm::java::{new_project_from_paths, new_project_paths, new_diff_grader, show_results};
+
+pub async fn main() {
+    let paths = new_project_paths()
+        .lib_dir("../../../jar_files")
+        .report_dir("test_reports")
+        .build()?;
+    let project = new_project_from_paths(paths)?;
+
+    let diff = new_diff_grader()
+        .project(project)
+        .file("Application.Main")
+        .req_name("diff-hello")
+        .out_of(5.0)
+        .cases([("===== Initial Empty List =====\n", None)])
+        .run()
+        .await?;
+
+    match diff.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([diff])?;
+    Ok(())
+}

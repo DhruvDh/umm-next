@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_openai::types::chat::ReasoningEffort;
 use postgrest::Postgrest;
 use reqwest::Client;
@@ -290,7 +290,8 @@ impl ConfigState {
         *self
             .retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
     }
 
     /// Updates the default heuristic configuration for snippet retrieval.
@@ -298,14 +299,16 @@ impl ConfigState {
         *self
             .retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned") = cfg;
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned") = cfg;
     }
 
     /// Returns the configured start offset for heuristic retrieval.
     pub fn heuristic_start_offset(&self) -> usize {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .start_offset()
     }
 
@@ -313,7 +316,8 @@ impl ConfigState {
     pub fn set_heuristic_start_offset(&self, value: usize) {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .set_start_offset(value);
     }
 
@@ -321,7 +325,8 @@ impl ConfigState {
     pub fn heuristic_num_lines(&self) -> usize {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .num_lines()
     }
 
@@ -329,7 +334,8 @@ impl ConfigState {
     pub fn set_heuristic_num_lines(&self, value: usize) {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .set_num_lines(value);
     }
 
@@ -337,7 +343,8 @@ impl ConfigState {
     pub fn heuristic_max_line_refs(&self) -> usize {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .max_line_refs()
     }
 
@@ -345,7 +352,8 @@ impl ConfigState {
     pub fn set_heuristic_max_line_refs(&self, value: usize) {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .set_max_line_refs(value);
     }
 
@@ -353,7 +361,8 @@ impl ConfigState {
     pub fn heuristic_full_file_ratio(&self) -> f32 {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .full_file_ratio()
     }
 
@@ -361,7 +370,8 @@ impl ConfigState {
     pub fn set_heuristic_full_file_ratio(&self, value: f32) {
         self.retrieval_heuristic
             .lock()
-            .expect("retrieval heuristic poisoned")
+            .map_err(|e| anyhow!("retrieval heuristic lock poisoned: {e}"))
+            .expect("retrieval heuristic lock poisoned")
             .set_full_file_ratio(value);
     }
 
@@ -411,7 +421,13 @@ impl std::ops::Deref for OpenAiRef {
     type Target = OpenAiEnv;
 
     fn deref(&self) -> &Self::Target {
-        self.0.openai.as_ref().expect("OpenAI config missing")
+        // SAFETY: OpenAiRef is only constructed when openai is Some (see
+        // `openai_config`). If that invariant is broken, return a hard error
+        // instead of panicking to aid debugging.
+        self.0
+            .openai
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("OpenAiRef constructed without config"))
     }
 }
 
@@ -443,7 +459,10 @@ fn build_default() -> Result<Arc<ConfigState>> {
 /// Ensure the global configuration has been initialized and return a handle.
 pub fn ensure_initialized() -> Result<ConfigHandle> {
     let slot = slot();
-    let mut guard = slot.lock().expect("config slot poisoned");
+    let mut guard = slot
+        .lock()
+        .map_err(|_| anyhow!("configuration mutex poisoned; restart recommended"))?;
+
     if let Some(cfg) = guard.as_ref() {
         return Ok(ConfigHandle(Arc::clone(cfg)));
     }
@@ -455,7 +474,13 @@ pub fn ensure_initialized() -> Result<ConfigHandle> {
 
 /// Returns the active configuration, initializing it on demand.
 pub fn get() -> ConfigHandle {
-    ensure_initialized().expect("configuration initialization failed")
+    match ensure_initialized() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to initialize configuration: {e:?}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Returns the configured PostgREST client, if Supabase has been configured.

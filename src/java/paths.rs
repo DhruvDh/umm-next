@@ -21,27 +21,14 @@ pub struct ProjectPaths {
     lib_dir:    PathBuf,
     /// `.umm/` metadata directory maintained by the tool.
     umm_dir:    PathBuf,
+    /// `test_reports/` directory where graders write reports (e.g., PIT).
+    report_dir: PathBuf,
 }
 
 impl ProjectPaths {
     /// Creates a new set of workspace paths rooted at `root_dir`.
     pub fn new(root_dir: PathBuf) -> Self {
-        let source_dir = root_dir.join("src");
-        let build_dir = root_dir.join("target");
-        let test_dir = root_dir.join("test");
-        let lib_dir = root_dir.join("lib");
-        let umm_dir = root_dir.join(".umm");
-        // TODO: When Project introduces a typed builder, surface hooks to override
-        // these defaults.
-
-        Self {
-            root_dir,
-            source_dir,
-            build_dir,
-            test_dir,
-            lib_dir,
-            umm_dir,
-        }
+        Self::build_with_defaults(root_dir, None, None, None, None, None, None)
     }
 
     /// Returns the platform specific separator character for javac paths.
@@ -52,6 +39,21 @@ impl ProjectPaths {
     /// Root directory for the project.
     pub fn root_dir(&self) -> &Path {
         self.root_dir.as_path()
+    }
+
+    /// Construct paths from optional overrides.
+    pub fn from_parts(
+        root_dir: PathBuf,
+        source_dir: Option<PathBuf>,
+        build_dir: Option<PathBuf>,
+        test_dir: Option<PathBuf>,
+        lib_dir: Option<PathBuf>,
+        umm_dir: Option<PathBuf>,
+        report_dir: Option<PathBuf>,
+    ) -> Self {
+        Self::build_with_defaults(
+            root_dir, source_dir, build_dir, test_dir, lib_dir, umm_dir, report_dir,
+        )
     }
 
     /// Source directory for the project.
@@ -74,15 +76,57 @@ impl ProjectPaths {
         self.lib_dir.as_path()
     }
 
+    /// Returns a copy of these paths with a different `lib` directory.
+    pub fn with_lib_dir(mut self, lib_dir: impl Into<PathBuf>) -> Self {
+        self.lib_dir = lib_dir.into();
+        self
+    }
+
     /// Directory for umm artefacts.
     pub fn umm_dir(&self) -> &Path {
         self.umm_dir.as_path()
+    }
+
+    /// Directory for grader reports (e.g., PIT mutation reports).
+    pub fn report_dir(&self) -> &Path {
+        self.report_dir.as_path()
     }
 }
 
 impl Default for ProjectPaths {
     fn default() -> Self {
         Self::new(PathBuf::from("."))
+    }
+}
+
+impl ProjectPaths {
+    /// Centralized constructor that applies standard defaults when overrides
+    /// are absent.
+    fn build_with_defaults(
+        root_dir: PathBuf,
+        source_dir: Option<PathBuf>,
+        build_dir: Option<PathBuf>,
+        test_dir: Option<PathBuf>,
+        lib_dir: Option<PathBuf>,
+        umm_dir: Option<PathBuf>,
+        report_dir: Option<PathBuf>,
+    ) -> Self {
+        let source_dir = source_dir.unwrap_or_else(|| root_dir.join("src"));
+        let build_dir = build_dir.unwrap_or_else(|| root_dir.join("target"));
+        let test_dir = test_dir.unwrap_or_else(|| root_dir.join("test"));
+        let lib_dir = lib_dir.unwrap_or_else(|| root_dir.join("lib"));
+        let umm_dir = umm_dir.unwrap_or_else(|| root_dir.join(".umm"));
+        let report_dir = report_dir.unwrap_or_else(|| umm_dir.join("test_reports"));
+
+        Self {
+            root_dir,
+            source_dir,
+            build_dir,
+            test_dir,
+            lib_dir,
+            umm_dir,
+            report_dir,
+        }
     }
 }
 
@@ -95,19 +139,9 @@ pub fn project_paths(
     test_dir: Option<PathBuf>,
     lib_dir: Option<PathBuf>,
     umm_dir: Option<PathBuf>,
+    report_dir: Option<PathBuf>,
 ) -> ProjectPaths {
-    let source_dir = source_dir.unwrap_or_else(|| root_dir.join("src"));
-    let build_dir = build_dir.unwrap_or_else(|| root_dir.join("target"));
-    let test_dir = test_dir.unwrap_or_else(|| root_dir.join("test"));
-    let lib_dir = lib_dir.unwrap_or_else(|| root_dir.join("lib"));
-    let umm_dir = umm_dir.unwrap_or_else(|| root_dir.join(".umm"));
-
-    ProjectPaths {
-        root_dir,
-        source_dir,
-        build_dir,
-        test_dir,
-        lib_dir,
-        umm_dir,
-    }
+    ProjectPaths::build_with_defaults(
+        root_dir, source_dir, build_dir, test_dir, lib_dir, umm_dir, report_dir,
+    )
 }
