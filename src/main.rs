@@ -20,7 +20,15 @@ use dotenvy::dotenv;
 use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
-use umm::{java::Project as JavaProject, python::Project as PythonProject, scripting};
+use umm::{
+    java::Project as JavaProject,
+    process,
+    python::{
+        Project as PythonProject,
+        util::{black_format_command, ruff_lint_command},
+    },
+    scripting,
+};
 
 /// Updates binary based on github releases
 fn update() -> Result<()> {
@@ -66,6 +74,10 @@ enum PythonCmd {
     Check(String),
     /// Run pytest tests
     Test(String),
+    /// Lint using ruff (targets optional)
+    Lint(Vec<String>),
+    /// Format using black (targets optional)
+    Format(Vec<String>),
     /// Grade using a Rune script
     Grade(String),
     /// Print information about the project
@@ -95,6 +107,11 @@ fn options() -> Cmd {
     /// parsers file name
     fn f() -> impl Parser<String> {
         positional("FILENAME").help("Name of file")
+    }
+
+    /// parses zero or more file/dir targets
+    fn fs() -> impl Parser<Vec<String>> {
+        f().many()
     }
 
     /// parses Assignment name or path to grading script file
@@ -162,6 +179,16 @@ fn options() -> Cmd {
         .command("test")
         .help("Run pytest on a test file");
 
+    let python_lint = construct!(PythonCmd::Lint(fs()))
+        .to_options()
+        .command("lint")
+        .help("Run ruff lint (defaults to project root when no paths are given)");
+
+    let python_format = construct!(PythonCmd::Format(fs()))
+        .to_options()
+        .command("format")
+        .help("Run black format (defaults to project root when no paths are given)");
+
     let python_grade = construct!(PythonCmd::Grade(g()))
         .to_options()
         .command("grade")
@@ -176,6 +203,8 @@ fn options() -> Cmd {
         python_run,
         python_check,
         python_test,
+        python_lint,
+        python_format,
         python_grade,
         python_info
     ])
@@ -297,6 +326,68 @@ async fn run_cli() -> Result<()> {
                         eprintln!("{:#?}", e);
                         std::process::exit(1);
                     }
+                }
+            }
+            PythonCmd::Lint(paths) => {
+                let project = PythonProject::new()?;
+                let targets: Vec<String> = if paths.is_empty() {
+                    vec![project.paths().root_dir().display().to_string()]
+                } else {
+                    paths
+                };
+                let target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+                let spec = ruff_lint_command(project.paths(), &target_refs)?;
+                let collected = process::run_collect(
+                    &spec.program,
+                    &spec.args,
+                    process::StdinSource::Null,
+                    spec.cwd.as_deref(),
+                    &spec.env,
+                    None,
+                )
+                .await?;
+
+                let stdout = String::from_utf8_lossy(&collected.stdout);
+                let stderr = String::from_utf8_lossy(&collected.stderr);
+                if !stdout.trim().is_empty() {
+                    print!("{stdout}");
+                }
+                if !stderr.trim().is_empty() {
+                    eprint!("{stderr}");
+                }
+                if !collected.status.success() {
+                    std::process::exit(collected.status.code().unwrap_or(1));
+                }
+            }
+            PythonCmd::Format(paths) => {
+                let project = PythonProject::new()?;
+                let targets: Vec<String> = if paths.is_empty() {
+                    vec![project.paths().root_dir().display().to_string()]
+                } else {
+                    paths
+                };
+                let target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+                let spec = black_format_command(project.paths(), &target_refs)?;
+                let collected = process::run_collect(
+                    &spec.program,
+                    &spec.args,
+                    process::StdinSource::Null,
+                    spec.cwd.as_deref(),
+                    &spec.env,
+                    None,
+                )
+                .await?;
+
+                let stdout = String::from_utf8_lossy(&collected.stdout);
+                let stderr = String::from_utf8_lossy(&collected.stderr);
+                if !stdout.trim().is_empty() {
+                    print!("{stdout}");
+                }
+                if !stderr.trim().is_empty() {
+                    eprint!("{stderr}");
+                }
+                if !collected.status.success() {
+                    std::process::exit(collected.status.code().unwrap_or(1));
                 }
             }
             PythonCmd::Grade(g) => {

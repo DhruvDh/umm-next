@@ -85,4 +85,9 @@ impl GradeResult {
     pub fn out_of_value(&self) -> f64 {
         self.grade.out_of
     }
+
+    /// Returns the textual reason/explanation for the grade.
+    pub fn reason(&self) -> &str {
+        self.reason.as_str()
+    }
 }

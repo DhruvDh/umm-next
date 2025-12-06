@@ -8,6 +8,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
 use bon::Builder;
+use tree_sitter::Node;
 
 use super::results::{Grade, GradeResult};
 use crate::{config, python::Project};
@@ -124,22 +125,8 @@ impl DocsGrader {
 
     /// Checks if a file has a module-level docstring.
     fn check_module_docstring(&self, file: &crate::python::File) -> Result<bool> {
-        let query = r#"
-            (module
-              (expression_statement
-                (string) @docstring))
-        "#;
-
-        let results = file.query(query)?;
-
-        // Check if there's a string as the first expression statement
-        if let Some(first_result) = results.first()
-            && first_result.get("docstring").is_some()
-        {
-            return Ok(true);
-        }
-
-        Ok(false)
+        let root = file.parser().root_node()?;
+        Ok(first_statement_is_string(root, file.code()))
     }
 
     /// Checks if a function has a docstring.
@@ -148,37 +135,48 @@ impl DocsGrader {
         file: &crate::python::File,
         func_name: &str,
     ) -> Result<bool> {
-        let query = format!(
-            r#"
-            (function_definition
-              name: (identifier) @name
-              body: (block
-                (expression_statement
-                  (string) @docstring))
-              (#eq? @name "{}"))
-            "#,
-            func_name
-        );
-
-        let results = file.query(&query)?;
-        Ok(!results.is_empty())
+        has_leading_docstring(file, "function_definition", func_name)
     }
 
     /// Checks if a class has a docstring.
     fn check_class_docstring(&self, file: &crate::python::File, class_name: &str) -> Result<bool> {
-        let query = format!(
-            r#"
-            (class_definition
-              name: (identifier) @name
-              body: (block
-                (expression_statement
-                  (string) @docstring))
-              (#eq? @name "{}"))
-            "#,
-            class_name
-        );
-
-        let results = file.query(&query)?;
-        Ok(!results.is_empty())
+        has_leading_docstring(file, "class_definition", class_name)
     }
+}
+
+/// Returns true if the first named statement inside `block` is a string
+/// expression (i.e., a docstring). Works for module roots and block nodes.
+fn first_statement_is_string(block: Node, source: &str) -> bool {
+    block
+        .named_child(0)
+        .filter(|stmt| stmt.kind() == "expression_statement")
+        .and_then(|stmt| stmt.named_child(0))
+        .map(|child| child.kind() == "string" && child.utf8_text(source.as_bytes()).is_ok())
+        .unwrap_or(false)
+}
+
+/// Returns true if the named function/class has a leading docstring.
+fn has_leading_docstring(file: &crate::python::File, def_kind: &str, name: &str) -> Result<bool> {
+    let root = file.parser().root_node()?;
+    let source_bytes = file.code().as_bytes();
+
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == def_kind
+            && let Some(name_node) = node.child_by_field_name("name")
+            && let Ok(text) = name_node.utf8_text(source_bytes)
+            && text == name
+            && let Some(body) = node.child_by_field_name("body")
+        {
+            return Ok(first_statement_is_string(body, file.code()));
+        }
+
+        for i in (0..node.named_child_count()).rev() {
+            if let Some(child) = node.named_child(i) {
+                stack.push(child);
+            }
+        }
+    }
+
+    Ok(false)
 }

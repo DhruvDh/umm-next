@@ -32,6 +32,18 @@ pub fn new_project_from_paths(paths: ProjectPaths) -> RuneResult<Project> {
     })
 }
 
+/// Free constructor: build a project from explicit paths and a run context.
+#[rune::function(path = new_project_from_paths_with_context)]
+pub fn new_project_from_paths_with_context(
+    paths: ProjectPaths,
+    ctx: RunContext,
+) -> RuneResult<Project> {
+    Ok(Project {
+        inner: crate::python::Project::from_paths_with_context(paths.inner, ctx.inner)
+            .map_err(host_err)?,
+    })
+}
+
 /// Free constructor: start a paths builder for fine-grained overrides.
 #[rune::function(path = new_project_paths)]
 pub fn new_project_paths() -> ProjectPathsBuilder {
@@ -43,6 +55,24 @@ pub fn new_project_paths() -> ProjectPathsBuilder {
         data_dir:   None,
         report_dir: None,
         umm_dir:    None,
+    }
+}
+
+/// Free constructor: start a run-context builder.
+#[rune::function(path = new_run_context)]
+pub fn new_run_context() -> RunContextBuilder {
+    RunContextBuilder {
+        root_dir:    None,
+        working_dir: None,
+        env_path:    None,
+        overlays:    Vec::new(),
+        locked:      false,
+        no_project:  false,
+        no_sync:     false,
+        frozen:      false,
+        no_config:   true,
+        no_env_file: true,
+        pythonpath:  None,
     }
 }
 
@@ -129,12 +159,56 @@ pub struct Project {
     inner: crate::python::Project,
 }
 
+impl Project {
+    /// Replace the run context on this project.
+    pub fn with_run_context(mut self, ctx: RunContext) -> Self {
+        self.inner = self.inner.clone().with_run_context(ctx.inner);
+        self
+    }
+}
+
 /// Workspace path set bridged into Rune.
 #[derive(Any, Clone)]
 #[rune(item = ::umm::python)]
 pub struct ProjectPaths {
     /// Underlying Rust `ProjectPaths`.
     inner: crate::python::ProjectPaths,
+}
+
+/// Execution context used to run Python tools/scripts.
+#[derive(Any, Clone)]
+#[rune(item = ::umm::python)]
+pub struct RunContext {
+    /// Underlying Rust `UvRunContext`.
+    inner: crate::python::util::UvRunContext,
+}
+
+/// Builder for `RunContext` with optional overrides.
+#[derive(Any, Clone)]
+#[rune(item = ::umm::python)]
+pub struct RunContextBuilder {
+    /// Project root directory (defaults to .).
+    root_dir:    Option<PathBuf>,
+    /// Working directory (defaults to root).
+    working_dir: Option<PathBuf>,
+    /// Environment path (defaults to .umm/venv under root).
+    env_path:    Option<PathBuf>,
+    /// Overlay deps for a single run.
+    overlays:    Vec<String>,
+    /// Whether to pass --locked.
+    locked:      bool,
+    /// Whether to disable project installation/detection.
+    no_project:  bool,
+    /// Whether to skip env sync.
+    no_sync:     bool,
+    /// Whether to forbid resolution (lockfile only).
+    frozen:      bool,
+    /// Disable uv config discovery.
+    no_config:   bool,
+    /// Disable .env loading.
+    no_env_file: bool,
+    /// Explicit PYTHONPATH entries.
+    pythonpath:  Option<Vec<String>>,
 }
 
 /// Builder for `ProjectPaths` with optional overrides.
@@ -209,6 +283,121 @@ impl ProjectPathsBuilder {
         );
 
         Ok(ProjectPaths { inner: paths })
+    }
+}
+
+impl RunContextBuilder {
+    /// Override project root used for uv project scoping.
+    pub fn root_dir(mut self, path: String) -> Self {
+        self.root_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override working directory.
+    pub fn working_dir(mut self, path: String) -> Self {
+        self.working_dir = Some(PathBuf::from(path));
+        self
+    }
+    /// Override environment path (virtualenv location).
+    pub fn env_path(mut self, path: String) -> Self {
+        self.env_path = Some(PathBuf::from(path));
+        self
+    }
+    /// Add an overlay dependency (e.g., pytest).
+    pub fn overlay(mut self, dep: String) -> Self {
+        self.overlays.push(dep);
+        self
+    }
+    /// Replace overlays wholesale.
+    pub fn overlays(mut self, deps: Vec<String>) -> Self {
+        self.overlays = deps;
+        self
+    }
+    /// Require uv to run in locked mode.
+    pub fn locked(mut self, locked: bool) -> Self {
+        self.locked = locked;
+        self
+    }
+    /// Disable project installation/detection.
+    pub fn no_project(mut self, no_project: bool) -> Self {
+        self.no_project = no_project;
+        self
+    }
+    /// Skip syncing the environment.
+    pub fn no_sync(mut self, no_sync: bool) -> Self {
+        self.no_sync = no_sync;
+        self
+    }
+    /// Use frozen lockfile mode (no resolution).
+    pub fn frozen(mut self, frozen: bool) -> Self {
+        self.frozen = frozen;
+        self
+    }
+    /// Disable uv config discovery.
+    pub fn no_config(mut self, no: bool) -> Self {
+        self.no_config = no;
+        self
+    }
+    /// Disable .env loading.
+    pub fn no_env_file(mut self, no: bool) -> Self {
+        self.no_env_file = no;
+        self
+    }
+    /// Set PYTHONPATH entries explicitly.
+    pub fn pythonpath(mut self, entries: Vec<String>) -> Self {
+        self.pythonpath = Some(entries);
+        self
+    }
+
+    /// Build a concrete `RunContext` using defaults for unspecified fields.
+    pub fn build(self) -> RuneResult<RunContext> {
+        let root = self.root_dir.unwrap_or_else(|| PathBuf::from("."));
+        let paths = crate::python::paths::ProjectPaths::from_parts(
+            root.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let mut ctx = crate::python::util::UvRunContext::for_paths(&paths);
+
+        if let Some(dir) = self.working_dir {
+            ctx = ctx.working_dir(dir);
+        }
+        if let Some(env) = self.env_path {
+            ctx = ctx.env_path(env);
+        }
+        if self.locked {
+            ctx = ctx.locked(true);
+        }
+        if self.no_project {
+            ctx = ctx.no_project(true);
+        }
+        if self.no_sync {
+            ctx = ctx.no_sync(true);
+        }
+        if self.frozen {
+            ctx = ctx.frozen(true);
+        }
+        ctx = ctx.no_config(self.no_config);
+        ctx = ctx.no_env_file(self.no_env_file);
+        if !self.overlays.is_empty() {
+            ctx = ctx.with_overlays(self.overlays);
+        }
+        if let Some(py_paths) = self.pythonpath {
+            let sep = paths.separator();
+            let mut pythonpath = std::ffi::OsString::new();
+            for (idx, entry) in py_paths.iter().enumerate() {
+                if idx > 0 {
+                    pythonpath.push(sep);
+                }
+                pythonpath.push(entry);
+            }
+            ctx = ctx.with_pythonpath(pythonpath);
+        }
+
+        Ok(RunContext { inner: ctx })
     }
 }
 
@@ -986,6 +1175,8 @@ pub fn module() -> Result<Module, ContextError> {
     module.ty::<Project>()?;
     module.ty::<ProjectPaths>()?;
     module.ty::<ProjectPathsBuilder>()?;
+    module.ty::<RunContext>()?;
+    module.ty::<RunContextBuilder>()?;
     module.ty::<GradeResult>()?;
     module.ty::<DiffCase>()?;
     module.ty::<DiffGrader>()?;
@@ -1006,7 +1197,9 @@ pub fn module() -> Result<Module, ContextError> {
     // Free constructors
     module.function_meta(new_project)?;
     module.function_meta(new_project_from_paths)?;
+    module.function_meta(new_project_from_paths_with_context)?;
     module.function_meta(new_project_paths)?;
+    module.function_meta(new_run_context)?;
     module.function_meta(new_diff_grader)?;
     module.function_meta(new_query_grader)?;
     module.function_meta(new_docs_grader)?;
@@ -1022,6 +1215,24 @@ pub fn module() -> Result<Module, ContextError> {
     module.associated_function("report_dir", ProjectPathsBuilder::report_dir)?;
     module.associated_function("umm_dir", ProjectPathsBuilder::umm_dir)?;
     module.associated_function("build", ProjectPathsBuilder::build)?;
+
+    // RunContextBuilder methods
+    module.associated_function("root_dir", RunContextBuilder::root_dir)?;
+    module.associated_function("working_dir", RunContextBuilder::working_dir)?;
+    module.associated_function("env_path", RunContextBuilder::env_path)?;
+    module.associated_function("overlay", RunContextBuilder::overlay)?;
+    module.associated_function("overlays", RunContextBuilder::overlays)?;
+    module.associated_function("locked", RunContextBuilder::locked)?;
+    module.associated_function("no_project", RunContextBuilder::no_project)?;
+    module.associated_function("no_sync", RunContextBuilder::no_sync)?;
+    module.associated_function("frozen", RunContextBuilder::frozen)?;
+    module.associated_function("no_config", RunContextBuilder::no_config)?;
+    module.associated_function("no_env_file", RunContextBuilder::no_env_file)?;
+    module.associated_function("pythonpath", RunContextBuilder::pythonpath)?;
+    module.associated_function("build", RunContextBuilder::build)?;
+
+    // Project run-context helper
+    module.associated_function("with_run_context", Project::with_run_context)?;
 
     // DiffGraderBuilder methods
     module.associated_function("req_name", DiffGraderBuilder::req_name)?;

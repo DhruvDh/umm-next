@@ -17,7 +17,6 @@ use super::{
     parser::Parser,
     paths::ProjectPaths,
     queries::{CLASS_DEF_QUERY, FUNCTION_DEF_QUERY, IMPORT_QUERY, MAIN_BLOCK_QUERY},
-    util::{python_module_command, python_module_with_deps_command, python_run_command},
 };
 use crate::{
     Dict, config,
@@ -133,11 +132,18 @@ pub struct File {
     parser:      Parser,
     /// Workspace paths associated with this file.
     paths:       ProjectPaths,
+    /// Execution context used when running tools/scripts for this file.
+    #[serde(skip)]
+    context:     super::util::UvRunContext,
 }
 
 impl File {
     /// Creates a new File from a path.
-    pub fn new(path: impl Into<PathBuf>, paths: ProjectPaths) -> Result<Self> {
+    pub fn new(
+        path: impl Into<PathBuf>,
+        paths: ProjectPaths,
+        context: super::util::UvRunContext,
+    ) -> Result<Self> {
         let path = path.into();
         let file_name = path
             .file_name()
@@ -189,6 +195,7 @@ impl File {
             has_main,
             parser,
             paths,
+            context,
         })
     }
 
@@ -296,17 +303,18 @@ impl File {
     /// Checks the file for syntax errors using Python's compile.
     pub async fn check(&self) -> Result<String, PythonFileError> {
         let path_str = self.path.to_string_lossy();
-        let (cmd, args) = python_module_command("py_compile", &[&path_str])
+        let spec = self
+            .context
+            .clone()
+            .run_module_command("py_compile", &[path_str.as_ref()])
             .map_err(PythonFileError::Unknown)?;
 
-        // For uv, we need to add the file path after -m py_compile
-        // The python_module_command already handles this
         let collected = process::run_collect(
-            &cmd,
-            &args,
+            &spec.program,
+            &spec.args,
             StdinSource::Null,
-            None,
-            &[],
+            spec.cwd.as_deref(),
+            &spec.env,
             Some(Duration::from_secs(30)),
         )
         .await
@@ -333,24 +341,39 @@ impl File {
         input: Option<String>,
         timeout: Duration,
     ) -> Result<String, PythonFileError> {
-        let (cmd, args) =
-            python_run_command(&self.path).map_err(PythonFileError::Unknown)?;
+        let use_module = !self.module_name.is_empty() && self.has_relative_imports();
+
+        let spec = if use_module {
+            self.context
+                .run_module_command(&self.module_name, &[])
+                .map_err(PythonFileError::Unknown)?
+        } else {
+            self.context
+                .run_script_command(&self.path)
+                .map_err(PythonFileError::Unknown)?
+        };
 
         let stdin_source = match input {
             Some(ref s) => StdinSource::Bytes(s.clone().into_bytes()),
             None => StdinSource::Null,
         };
 
-        let collected =
-            process::run_collect(&cmd, &args, stdin_source, None, &[], Some(timeout))
-                .await
-                .map_err(|e| {
-                    if e.to_string().contains("timeout") || e.to_string().contains("timed out") {
-                        PythonFileError::Timeout { timeout }
-                    } else {
-                        PythonFileError::Unknown(e)
-                    }
-                })?;
+        let collected = process::run_collect(
+            &spec.program,
+            &spec.args,
+            stdin_source,
+            spec.cwd.as_deref(),
+            &spec.env,
+            Some(timeout),
+        )
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("timeout") || e.to_string().contains("timed out") {
+                PythonFileError::Timeout { timeout }
+            } else {
+                PythonFileError::Unknown(e)
+            }
+        })?;
 
         if collected.status.success() {
             Ok(String::from_utf8_lossy(&collected.stdout).to_string())
@@ -366,6 +389,13 @@ impl File {
         }
     }
 
+    /// Returns true if the file contains obvious relative imports that require
+    /// module execution semantics.
+    fn has_relative_imports(&self) -> bool {
+        let code = self.parser.code();
+        code.contains("from .") || code.contains("from ..")
+    }
+
     /// Runs pytest on this test file.
     pub async fn test(&self) -> Result<String, PythonFileError> {
         if self.kind != FileType::Test {
@@ -376,16 +406,19 @@ impl File {
         }
 
         let path_str = self.path.to_string_lossy();
-        // Use --with pytest to inject pytest for this run
-        let (cmd, args) = python_module_with_deps_command("pytest", &["pytest"], &["-v", &path_str])
+        let spec = self
+            .context
+            .clone()
+            .with_overlay("pytest")
+            .run_module_command("pytest", &["-v", "--tb=short", &path_str])
             .map_err(PythonFileError::Unknown)?;
 
         let collected = process::run_collect(
-            &cmd,
-            &args,
+            &spec.program,
+            &spec.args,
             StdinSource::Null,
-            None,
-            &[],
+            spec.cwd.as_deref(),
+            &spec.env,
             Some(Duration::from_secs(120)),
         )
         .await
@@ -502,6 +535,11 @@ impl File {
         &self.parser
     }
 
+    /// Update the execution context used for this file.
+    pub(crate) fn set_context(&mut self, ctx: super::util::UvRunContext) {
+        self.context = ctx;
+    }
+
     /// Returns the source code.
     pub fn code(&self) -> &str {
         self.parser.code()
@@ -510,5 +548,47 @@ impl File {
     /// Executes a tree-sitter query on this file.
     pub fn query(&self, q: &str) -> Result<Vec<Dict>> {
         self.parser.query(q)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Write, path::PathBuf, time::SystemTime};
+
+    use super::*;
+    use crate::python::util::UvRunContext;
+
+    fn temp_py_file(contents: &str) -> (PathBuf, PathBuf, ProjectPaths) {
+        let nonce = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("umm_rel_import_{nonce}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        let path = dir.join("mod.py");
+        let mut f = std::fs::File::create(&path).expect("create file");
+        f.write_all(contents.as_bytes()).expect("write code");
+
+        let paths = ProjectPaths::new(dir.to_path_buf());
+        (dir, path, paths)
+    }
+
+    #[test]
+    fn detects_relative_imports() {
+        let (dir, path, paths) = temp_py_file("from .util import foo\n");
+        let ctx = UvRunContext::for_paths(&paths);
+        let file = File::new(&path, paths, ctx).expect("build file");
+        assert!(file.has_relative_imports());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ignores_absolute_imports() {
+        let (dir, path, paths) = temp_py_file("import math\nprint(math.sqrt(4))\n");
+        let ctx = UvRunContext::for_paths(&paths);
+        let file = File::new(&path, paths, ctx).expect("build file");
+        assert!(!file.has_relative_imports());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

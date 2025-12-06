@@ -6,7 +6,7 @@
 use std::fmt::Formatter;
 
 use anyhow::{Context, Result, anyhow};
-use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::Dict;
 
@@ -65,6 +65,19 @@ impl Parser {
     /// A getter for parser's source code.
     pub fn code(&self) -> &str {
         self.code.as_str()
+    }
+
+    /// Returns the parse tree's root node.
+    pub fn root_node(&self) -> Result<Node<'_>> {
+        self._tree
+            .as_ref()
+            .map(Tree::root_node)
+            .context("Treesitter could not parse code")
+    }
+
+    /// Returns the tree-sitter language (useful for custom queries).
+    pub fn language(&self) -> &Language {
+        &self.lang
     }
 
     /// A setter for parser's source code.

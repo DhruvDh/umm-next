@@ -15,7 +15,7 @@ use super::results::{Grade, GradeResult};
 use crate::{
     config,
     process::{self, StdinSource},
-    python::{Project, util::python_module_with_deps_command},
+    python::Project,
     types::LineRef,
 };
 
@@ -56,45 +56,45 @@ impl TestGrader {
         let mut total_tests = 0usize;
         let mut passed_tests = 0usize;
         let mut all_outputs = Vec::new();
-        let mut all_diags = Vec::new();
+        let mut _all_diags = Vec::new();
 
+        // Resolve files once and run pytest in a single invocation so fixtures
+        // and conftest discovery behave like a normal project run.
+        let mut pytest_args: Vec<String> = vec!["-v".into(), "--tb=short".into()];
         for test_file_name in &self.test_files {
             let file = self.project.identify(test_file_name)?;
+            pytest_args.push(file.path().to_string_lossy().to_string());
+        }
 
-            // Build pytest command using uv --with pytest
-            let path_str = file.path().to_string_lossy();
-            let (cmd, args) = python_module_with_deps_command(
-                "pytest",
-                &["pytest"],
-                &["-v", "--tb=short", &path_str],
-            )?;
+        let context = self.project.run_context().clone().with_overlay("pytest");
+        let args_str: Vec<&str> = pytest_args.iter().map(|s| s.as_str()).collect();
+        let spec = context.run_module_command("pytest", &args_str)?;
 
-            let collected = process::run_collect(
-                &cmd,
-                &args,
-                StdinSource::Null,
-                None,
-                &[],
-                Some(Duration::from_secs(120)),
-            )
-            .await?;
+        let collected = process::run_collect(
+            &spec.program,
+            &spec.args,
+            StdinSource::Null,
+            spec.cwd.as_deref(),
+            &spec.env,
+            Some(Duration::from_secs(120)),
+        )
+        .await?;
 
-            let stdout = String::from_utf8_lossy(&collected.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&collected.stderr).to_string();
-            let output = format!("{}\n{}", stdout, stderr);
+        let stdout = String::from_utf8_lossy(&collected.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&collected.stderr).to_string();
+        let output = format!("{}\n{}", stdout, stderr);
 
-            all_outputs.push(format!("### {}\n```\n{}\n```", test_file_name, output));
+        all_outputs.push(format!("### pytest\n```\n{}\n```", output));
 
-            // Parse test results
-            let (file_total, file_passed) = self.parse_pytest_output(&output);
-            total_tests += file_total;
-            passed_tests += file_passed;
+        // Parse test results
+        let (file_total, file_passed) = self.parse_pytest_output(&output);
+        total_tests += file_total;
+        passed_tests += file_passed;
 
-            // Extract diagnostics from failures
-            if !collected.status.success() {
-                let diags = self.extract_failure_locations(&output);
-                all_diags.extend(diags);
-            }
+        // Extract diagnostics from failures
+        if !collected.status.success() {
+            let diags = self.extract_failure_locations(&output);
+            _all_diags.extend(diags);
         }
 
         let grade = if total_tests > 0 {

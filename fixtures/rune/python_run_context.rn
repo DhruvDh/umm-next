@@ -1,0 +1,17 @@
+use umm::python;
+
+pub async fn main() {
+    // Build a run context that sets a custom working dir.
+    let ctx = python::new_run_context()
+        .working_dir("fixtures/python/hello")
+        .build();
+
+    let paths = python::new_project_paths()
+        .root_dir("fixtures/python/hello")
+        .build();
+
+    let project = python::new_project_from_paths_with_context(paths, ctx);
+    let file = project.clone().identify("main").unwrap();
+    let output = file.run(None).await.unwrap();
+    println!("{}", output.trim());
+}

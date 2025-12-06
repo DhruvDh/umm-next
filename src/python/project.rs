@@ -14,20 +14,48 @@ use serde::{Deserialize, Serialize};
 use super::{
     file::{File, FileType},
     paths::ProjectPaths,
-    util::{discover_data_files, discover_python_files, discover_test_files},
+    util::{UvRunContext, discover_data_files, discover_python_files, discover_test_files},
 };
 
+/// Register a lookup alias for a file index, avoiding duplicate entries.
+fn register_alias(map: &mut HashMap<String, Vec<usize>>, alias: String, idx: usize) {
+    let entry = map.entry(alias).or_default();
+    if !entry.contains(&idx) {
+        entry.push(idx);
+    }
+}
+
 /// Represents a Python project with discovered files and metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     /// Collection of Python files in this project.
-    files:      Vec<File>,
+    files:       Vec<File>,
     /// Cached list of names kept in lockstep with `files` for quick lookups.
-    names:      Vec<String>,
+    names:       Vec<String>,
     /// Workspace paths associated with this project.
-    paths:      ProjectPaths,
+    paths:       ProjectPaths,
+    /// Execution context used for running tools/scripts.
+    #[serde(skip)]
+    run_context: UvRunContext,
     /// Data files discovered in the project (.txt, .csv, .json).
-    data_files: HashMap<String, PathBuf>,
+    data_files:  HashMap<String, PathBuf>,
+    #[serde(skip)]
+    /// Alias map used to disambiguate lookups (module names, file names,
+    /// paths).
+    alias_map:   HashMap<String, Vec<usize>>,
+}
+
+impl Default for Project {
+    fn default() -> Self {
+        Project::from_root(".").unwrap_or_else(|_| Self {
+            files:       Vec::new(),
+            names:       Vec::new(),
+            paths:       ProjectPaths::default(),
+            run_context: UvRunContext::default(),
+            data_files:  HashMap::new(),
+            alias_map:   HashMap::new(),
+        })
+    }
 }
 
 impl Project {
@@ -45,18 +73,38 @@ impl Project {
 
     /// Creates a new project from explicit paths.
     pub fn from_paths(paths: ProjectPaths) -> Result<Self> {
+        let ctx = UvRunContext::for_paths(&paths);
+        Self::from_paths_with_context(paths, ctx)
+    }
+
+    /// Creates a new project from explicit paths and a custom run context.
+    pub fn from_paths_with_context(paths: ProjectPaths, run_context: UvRunContext) -> Result<Self> {
         let mut files = Vec::new();
         let mut names = Vec::new();
+        let mut alias_map: HashMap<String, Vec<usize>> = HashMap::new();
 
         // Discover Python files
         let py_files = discover_python_files(&paths)?;
 
         for path in py_files {
             let display_path = path.display().to_string();
-            match File::new(&path, paths.clone()) {
+            match File::new(&path, paths.clone(), run_context.clone()) {
                 Ok(file) => {
                     names.push(file.name().to_string());
+                    let idx = files.len();
                     files.push(file);
+
+                    let inserted = &files[idx];
+                    register_alias(&mut alias_map, inserted.name().to_string(), idx);
+                    register_alias(&mut alias_map, inserted.file_name().to_string(), idx);
+                    if !inserted.module_name().is_empty() {
+                        register_alias(&mut alias_map, inserted.module_name().to_string(), idx);
+                    }
+
+                    if let Ok(rel) = inserted.path().strip_prefix(paths.root_dir()) {
+                        let rel_str = rel.to_string_lossy().to_string();
+                        register_alias(&mut alias_map, rel_str, idx);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Skipping file {} due to error: {}", display_path, e);
@@ -74,10 +122,26 @@ impl Project {
                 }
 
                 let display_path = path.display().to_string();
-                match File::new(&path, paths.clone()) {
+                match File::new(&path, paths.clone(), run_context.clone()) {
                     Ok(file) => {
                         names.push(file.name().to_string());
                         files.push(file);
+
+                        let idx = files.len() - 1;
+                        register_alias(&mut alias_map, files[idx].name().to_string(), idx);
+                        register_alias(&mut alias_map, files[idx].file_name().to_string(), idx);
+                        if !files[idx].module_name().is_empty() {
+                            register_alias(
+                                &mut alias_map,
+                                files[idx].module_name().to_string(),
+                                idx,
+                            );
+                        }
+
+                        if let Ok(rel) = files[idx].path().strip_prefix(paths.root_dir()) {
+                            let rel_str = rel.to_string_lossy().to_string();
+                            register_alias(&mut alias_map, rel_str, idx);
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Skipping test file {} due to error: {}", display_path, e);
@@ -100,7 +164,9 @@ impl Project {
             files,
             names,
             paths,
+            run_context,
             data_files,
+            alias_map,
         })
     }
 
@@ -149,31 +215,34 @@ impl Project {
         candidates.sort();
         candidates.dedup();
 
-        // Try exact matches against stored simple names
+        let mut matches: Vec<usize> = Vec::new();
         for cand in &candidates {
-            if let Some(idx) = self.names.iter().position(|n| n == cand) {
-                return Ok(self.files[idx].clone());
+            if let Some(indices) = self.alias_map.get(cand) {
+                matches.extend(indices.iter().copied());
             }
         }
 
-        // Try matching file names and module names
-        for file in &self.files {
-            if candidates
-                .iter()
-                .any(|cand| cand == file.file_name() || cand == file.module_name())
-            {
-                return Ok(file.clone());
-            }
+        matches.sort_unstable();
+        matches.dedup();
 
-            // Also try matching the last part of the module name
-            if let Some(last) = file.module_name().rsplit('.').next()
-                && candidates.iter().any(|cand| cand == last)
-            {
-                return Ok(file.clone());
+        match matches.len() {
+            1 => Ok(self.files[matches[0]].clone()),
+            0 => bail!("Could not find Python file '{}'. Available files: {:?}", name, self.names),
+            _ => {
+                let options: Vec<String> = matches
+                    .iter()
+                    .map(|idx| {
+                        format!(
+                            "{} ({} {})",
+                            self.files[*idx].name(),
+                            self.files[*idx].module_name(),
+                            self.files[*idx].path().display()
+                        )
+                    })
+                    .collect();
+                bail!("Ambiguous reference '{}'. Candidates: {}", name, options.join(", "))
             }
         }
-
-        bail!("Could not find Python file '{}'. Available files: {:?}", name, self.names)
     }
 
     /// Returns the number of files in the project.
@@ -210,6 +279,20 @@ impl Project {
     /// Returns the project paths.
     pub fn paths(&self) -> &ProjectPaths {
         &self.paths
+    }
+
+    /// Returns the run context configured for this project.
+    pub fn run_context(&self) -> &UvRunContext {
+        &self.run_context
+    }
+
+    /// Returns a copy of this project with a different run context.
+    pub fn with_run_context(mut self, run_context: UvRunContext) -> Self {
+        self.run_context = run_context;
+        for file in &mut self.files {
+            file.set_context(self.run_context.clone());
+        }
+        self
     }
 
     /// Returns a JSON description of the project.

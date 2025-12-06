@@ -112,9 +112,12 @@ impl DiffGrader {
                         messages.push(
                             ChatCompletionRequestUserMessageArgs::default()
                                 .content(format!(
-                                    "Test case {} \
-                                     failed.\n\nExpected:\n```\n{}\n```\n\nActual:\n```\n{}\n```\\
-                                     n\nDiff:\n```\n{}\n```",
+                                    concat!(
+                                        "Test case {} failed.\n\n",
+                                        "Expected:\n```\n{}\n```\n\n",
+                                        "Actual:\n```\n{}\n```\n\n",
+                                        "Diff:\n```\n{}\n```"
+                                    ),
                                     case_num, case.expected, actual, diff
                                 ))
                                 .name("Student".to_string())

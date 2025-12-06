@@ -113,8 +113,13 @@ impl ProjectPaths {
         report_dir: Option<PathBuf>,
         umm_dir: Option<PathBuf>,
     ) -> Self {
-        // Python projects often have source at root or in src/
-        let source_dir = source_dir.unwrap_or_else(|| root_dir.clone());
+        // Python projects often place sources under src/; fall back to the root
+        // when that directory does not exist.
+        let source_dir = source_dir.unwrap_or_else(|| {
+            let src = root_dir.join("src");
+            if src.exists() { src } else { root_dir.clone() }
+        });
+
         // Common test directory names
         let test_dir = test_dir.unwrap_or_else(|| {
             let tests = root_dir.join("tests");

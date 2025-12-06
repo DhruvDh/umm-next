@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [package]
 name = "umm"
-version = "0.3.0"
+version = "0.3.3"
 edition = "2024"
 default-run = "umm"
 license = "MIT"
@@ -21,7 +21,7 @@ peg = "0.8.5"
 tree-sitter = "0.25.10"
 # tree-sitter-java = { git = "https://github.com/tree-sitter/tree-sitter-java.git", rev = "39a11c8330d0b2ad75310456c378396785f79a4e" }
 tree-sitter-java = "0.23.5"
-tree-sitter-python = "0.23.6"
+tree-sitter-python = "0.25"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tabled = "0.20.0"

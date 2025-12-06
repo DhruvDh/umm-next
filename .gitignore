@@ -18,3 +18,7 @@ fixtures/java/rune-hello/results.json
 **/.umm/test_reports
 **/.umm
 fixtures/java/*/test_reports
+
+# Python artifacts
+__pycache__/
+*.pyc
