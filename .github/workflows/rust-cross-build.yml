@@ -117,4 +117,4 @@ jobs:
         with:
           draft: true
           files: dist/**
-          tag_name: "spring_24"
+          tag_name: "v0.3.3"
