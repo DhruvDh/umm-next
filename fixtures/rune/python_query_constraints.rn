@@ -1,0 +1,69 @@
+use umm::python::{new_project, new_query_grader, show_results, grade_all};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    // BEFORE (verbose, with explicit constraint):
+    // new_query_grader()
+    //     .project(project)
+    //     .file("example")
+    //     .req_name("has_calculator_class")
+    //     .out_of(2.0)
+    //     .class_with_name("Calculator")
+    //     .constraint(QueryConstraint::must_match_at_least_once())  // <- Not needed anymore!
+    //     .reason("Must define a Calculator class")
+    //     .run()
+    //     .await?;
+
+    // AFTER (cleaner, constraint defaults to must_match_at_least_once):
+    let class_check = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("has_calculator_class")
+        .out_of(2.0)
+        .defines_class("Calculator")  // Shorter alias
+        .reason("Must define a Calculator class")
+        .run()
+        .await?;
+
+    // Uses shorter aliases
+    let for_check = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("uses_for_loop")
+        .out_of(2.0)
+        .uses_for_loop()
+        .run()
+        .await?;
+
+    let while_check = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("uses_while_loop")
+        .out_of(2.0)
+        .uses_while_loop()
+        .run()
+        .await?;
+
+    let comp_check = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("uses_list_comprehension")
+        .out_of(2.0)
+        .uses_list_comprehension()
+        .run()
+        .await?;
+
+    let if_check = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("uses_if_statement")
+        .out_of(2.0)
+        .uses_if_statement()
+        .run()
+        .await?;
+
+    let results = grade_all([class_check, for_check, while_check, comp_check, if_check])?;
+    show_results(results)?;
+    Ok(())
+}

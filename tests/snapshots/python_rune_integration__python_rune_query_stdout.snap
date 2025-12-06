@@ -1,0 +1,5 @@
+---
+source: tests/python_rune_integration.rs
+expression: stdout
+---
+prompt: <none>

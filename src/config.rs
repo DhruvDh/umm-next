@@ -17,6 +17,7 @@ use state::InitCell;
 
 use crate::{
     java::config::{JavaConfig, JavaPrompts},
+    python::config::PythonPrompts,
     retrieval::HeuristicConfig,
 };
 
@@ -61,11 +62,11 @@ fn parse_reasoning_effort(val: Option<String>) -> ReasoningEffort {
 /// environment.
 pub struct OpenAiEnv {
     /// Base URL for the OpenAI-compatible API endpoint.
-    api_base:         String,
+    pub endpoint:     String,
     /// API key used to authenticate OpenAI requests.
-    api_key:          String,
+    pub api_key:      String,
     /// Default model identifier for chat completions.
-    model:            String,
+    pub model:        String,
     /// Optional temperature override, if provided.
     temperature:      Option<f32>,
     /// Optional top-p override, if provided.
@@ -78,11 +79,11 @@ impl OpenAiEnv {
     /// Construct an `OpenAiEnv` from environment variables; returns `None` if
     /// any required field is missing.
     fn from_env() -> Option<Self> {
-        let api_base = std::env::var("OPENAI_ENDPOINT").ok()?.trim().to_owned();
+        let endpoint = std::env::var("OPENAI_ENDPOINT").ok()?.trim().to_owned();
         let api_key = std::env::var("OPENAI_API_KEY_SLO").ok()?.trim().to_owned();
         let model = std::env::var("OPENAI_MODEL").ok()?.trim().to_owned();
 
-        if api_base.is_empty() || api_key.is_empty() || model.is_empty() {
+        if endpoint.is_empty() || api_key.is_empty() || model.is_empty() {
             return None;
         }
 
@@ -96,7 +97,7 @@ impl OpenAiEnv {
             parse_reasoning_effort(std::env::var("OPENAI_REASONING_EFFORT").ok());
 
         Some(Self {
-            api_base,
+            endpoint,
             api_key,
             model,
             temperature,
@@ -107,16 +108,16 @@ impl OpenAiEnv {
 
     /// Returns the API base URL used for OpenAI requests.
     pub fn api_base(&self) -> &str {
-        &self.api_base
+        &self.endpoint
     }
 
     /// Returns the API key used for OpenAI requests.
-    pub fn api_key(&self) -> &str {
+    pub fn get_api_key(&self) -> &str {
         &self.api_key
     }
 
     /// Returns the default model identifier.
-    pub fn model(&self) -> &str {
+    pub fn get_model(&self) -> &str {
         &self.model
     }
 
@@ -149,7 +150,7 @@ impl Clone for OpenAiEnv {
         };
 
         Self {
-            api_base: self.api_base.clone(),
+            endpoint: self.endpoint.clone(),
             api_key: self.api_key.clone(),
             model: self.model.clone(),
             temperature: self.temperature,
@@ -596,6 +597,21 @@ pub fn javac_timeout() -> Duration {
 /// Returns the configured java/JUnit timeout duration.
 pub fn java_timeout() -> Duration {
     get().java_timeout()
+}
+
+/// Returns the configured Python timeout duration.
+pub fn python_timeout() -> Duration {
+    read_timeout_secs("UMM_PYTHON_TIMEOUT_SECS", 60)
+}
+
+/// Returns the Python prompts bundle.
+pub fn python_prompts() -> PythonPrompts {
+    PythonPrompts::default()
+}
+
+/// Returns the OpenAI environment configuration, if available.
+pub fn openai_env() -> Option<OpenAiEnv> {
+    get().openai.clone()
 }
 
 /// Parses an environment variable into a `Duration`, falling back to

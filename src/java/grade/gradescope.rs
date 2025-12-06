@@ -312,7 +312,7 @@ async fn generate_combined_slo_report(
     let openai_client = OpenAIClient::with_config(
         OpenAIConfig::new()
             .with_api_base(openai.api_base().to_owned())
-            .with_api_key(openai.api_key().to_owned()),
+            .with_api_key(openai.get_api_key().to_owned()),
     );
 
     let messages = vec![
@@ -341,7 +341,7 @@ async fn generate_combined_slo_report(
     let response = openai_client
         .chat()
         .create(CreateChatCompletionRequest {
-            model: openai.model().to_owned(),
+            model: openai.get_model().to_owned(),
             messages,
             temperature: openai.temperature(),
             top_p: openai.top_p(),
@@ -491,13 +491,13 @@ async fn generate_slo_responses(
             let openai_client = OpenAIClient::with_config(
                 OpenAIConfig::new()
                     .with_api_base(openai_config.api_base().to_owned())
-                    .with_api_key(openai_config.api_key().to_owned()),
+                    .with_api_key(openai_config.get_api_key().to_owned()),
             );
 
             let response = openai_client
                 .chat()
                 .create(CreateChatCompletionRequest {
-                    model: openai_config.model().to_owned(),
+                    model: openai_config.get_model().to_owned(),
                     messages: messages.clone(),
                     temperature: openai_config.temperature(),
                     top_p: openai_config.top_p(),

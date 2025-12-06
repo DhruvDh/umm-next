@@ -6,5 +6,7 @@ pub mod config;
 pub mod gradescope;
 /// Java graders and project helpers.
 pub mod java;
+/// Python graders and project helpers.
+pub mod python;
 /// Retrieval heuristics configuration.
 pub mod retrieval;

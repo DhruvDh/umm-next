@@ -213,9 +213,7 @@ fn query_grader_chained_queries_operate_on_matches() {
     let project = project_for("query-cases");
     // First query: get the body of foo; second: find if_statement inside that body.
     let q1 = Query::new()
-        .set_query(
-            format!(include_str!("../src/java/queries/method_body_with_name.scm"), "foo").into(),
-        )
+        .set_query(format!(include_str!("../src/java/queries/method_body_with_name.scm"), "foo"))
         .set_capture("body".into());
     let q2 = Query::new()
         .set_query("((if_statement) @if)".into())
@@ -284,9 +282,7 @@ fn query_grader_nested_queries_yield_no_matches_propagates_error() {
     // First query matches foo body; second intentionally looks for a capture that
     // won't exist.
     let q1 = Query::new()
-        .set_query(
-            format!(include_str!("../src/java/queries/method_body_with_name.scm"), "foo").into(),
-        )
+        .set_query(format!(include_str!("../src/java/queries/method_body_with_name.scm"), "foo"))
         .set_capture("body".into());
     let q2 = Query::new()
         .set_query("((switch_expression) @switch)".into())

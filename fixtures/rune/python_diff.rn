@@ -1,0 +1,29 @@
+use umm::python::{new_project, new_diff_grader, grade_all, show_results};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    // BEFORE (clunky tuple syntax):
+    // new_diff_grader()
+    //     .cases([("Hello, World!\n", None)])  // What's the None for?
+
+    // AFTER (clearer methods):
+    let diff = new_diff_grader()
+        .project(project)
+        .file("hello")
+        .req_name("hello")
+        .out_of(5.0)
+        .expect("Hello, World!\n")  // Clear: expects this output
+        .run()
+        .await?;
+
+    let results = grade_all([diff])?;
+    for result in results.clone() {
+        match result.prompt() {
+            Some(prompt) => println!("{prompt}"),
+            None => println!("prompt: <none>"),
+        }
+    }
+    show_results(results)?;
+    Ok(())
+}

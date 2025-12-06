@@ -17,6 +17,8 @@ pub mod config;
 pub mod java;
 /// Async process helpers shared across modules.
 pub mod process;
+/// For discovering Python projects, analyzing them, and grading
+pub mod python;
 /// Retrieval-mode definitions shared across languages.
 pub mod retrieval;
 /// Scripting runtime integrations.

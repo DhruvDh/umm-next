@@ -1,0 +1,23 @@
+use umm::python::{new_project, new_query_grader, QueryConstraint, show_results};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    let grade = new_query_grader()
+        .project(project)
+        .file("example")
+        .req_name("query")
+        .out_of(1.0)
+        .function_with_name("main")
+        .constraint(QueryConstraint::must_match_at_least_once())
+        .run()
+        .await?;
+
+    match grade.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([grade])?;
+    Ok(())
+}

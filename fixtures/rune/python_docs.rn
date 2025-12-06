@@ -1,0 +1,22 @@
+use umm::python::{new_project, new_docs_grader, show_results};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    let grade = new_docs_grader()
+        .project(project)
+        .files(["hello"])
+        .req_name("docs")
+        .out_of(10.0)
+        .penalty(2.0)
+        .run()
+        .await?;
+
+    match grade.prompt() {
+        Some(prompt) => println!("{prompt}"),
+        None => println!("prompt: <none>"),
+    }
+
+    show_results([grade])?;
+    Ok(())
+}

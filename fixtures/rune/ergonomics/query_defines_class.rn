@@ -1,0 +1,15 @@
+use umm::python::{new_project, new_query_grader, show_results};
+
+pub async fn main() {
+    let project = new_project()?;
+    let grade = new_query_grader()
+        .project(project)
+        .file("comprehensive")
+        .req_name("test")
+        .out_of(5.0)
+        .defines_class("Calculator")
+        .run()
+        .await?;
+    show_results([grade])?;
+    Ok(())
+}

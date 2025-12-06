@@ -4,7 +4,7 @@
 //! # umm
 //! ## Introduction
 //!
-//! A java build tool for novices.
+//! A build tool for novices, supporting Java and Python.
 //!
 //! ## Installation
 //!
@@ -20,7 +20,7 @@ use dotenvy::dotenv;
 use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
-use umm::{java::Project, scripting};
+use umm::{java::Project as JavaProject, python::Project as PythonProject, scripting};
 
 /// Updates binary based on github releases
 fn update() -> Result<()> {
@@ -57,11 +57,28 @@ enum JavaCmd {
     Info,
 }
 
+/// Python-specific subcommands.
+#[derive(Debug, Clone)]
+enum PythonCmd {
+    /// Run a Python file
+    Run(String),
+    /// Check a file for syntax errors
+    Check(String),
+    /// Run pytest tests
+    Test(String),
+    /// Grade using a Rune script
+    Grade(String),
+    /// Print information about the project
+    Info,
+}
+
 /// Top-level CLI commands.
 #[derive(Debug, Clone)]
 enum Cmd {
     /// Java-related operations
     Java(JavaCmd),
+    /// Python-related operations
+    Python(PythonCmd),
     /// Update the command
     Update,
 }
@@ -77,7 +94,7 @@ fn options() -> Cmd {
 
     /// parsers file name
     fn f() -> impl Parser<String> {
-        positional("FILENAME").help("Name of java file")
+        positional("FILENAME").help("Name of file")
     }
 
     /// parses Assignment name or path to grading script file
@@ -85,6 +102,7 @@ fn options() -> Cmd {
         positional("NAME/PATH").help("Name of assignment in database or path to grading script")
     }
 
+    // Java commands
     let java_run = construct!(JavaCmd::Run(f()))
         .to_options()
         .command("run")
@@ -128,12 +146,50 @@ fn options() -> Cmd {
     .help("Java project commands")
     .map(Cmd::Java);
 
+    // Python commands
+    let python_run = construct!(PythonCmd::Run(f()))
+        .to_options()
+        .command("run")
+        .help("Run a Python file");
+
+    let python_check = construct!(PythonCmd::Check(f()))
+        .to_options()
+        .command("check")
+        .help("Check a Python file for syntax errors");
+
+    let python_test = construct!(PythonCmd::Test(f()))
+        .to_options()
+        .command("test")
+        .help("Run pytest on a test file");
+
+    let python_grade = construct!(PythonCmd::Grade(g()))
+        .to_options()
+        .command("grade")
+        .help("Grade your work using a Rune script");
+
+    let python_info = pure(PythonCmd::Info)
+        .to_options()
+        .command("info")
+        .help("Prints a JSON description of the project as parsed");
+
+    let python = construct!([
+        python_run,
+        python_check,
+        python_test,
+        python_grade,
+        python_info
+    ])
+    .to_options()
+    .command("python")
+    .help("Python project commands")
+    .map(Cmd::Python);
+
     let update = pure(Cmd::Update)
         .to_options()
         .command("update")
         .help("Update the umm command");
 
-    let cmd = construct!([java, update]);
+    let cmd = construct!([java, python, update]);
 
     cmd.to_options().descr("Build tool for novices").run()
 }
@@ -165,7 +221,7 @@ async fn run_cli() -> Result<()> {
     match cmd {
         Cmd::Java(java_cmd) => match java_cmd {
             JavaCmd::Run(f) => {
-                let file = Project::new()?.identify(f.as_str())?;
+                let file = JavaProject::new()?.identify(f.as_str())?;
                 match file.run(None).await {
                     Ok(out) => println!("{out}"),
                     Err(e) => {
@@ -175,7 +231,7 @@ async fn run_cli() -> Result<()> {
                 }
             }
             JavaCmd::Check(f) => {
-                let file = Project::new()?.identify(f.as_str())?;
+                let file = JavaProject::new()?.identify(f.as_str())?;
                 match file.check().await {
                     Ok(out) => println!("{out}"),
                     Err(e) => {
@@ -185,7 +241,7 @@ async fn run_cli() -> Result<()> {
                 }
             }
             JavaCmd::Test(f, t) => {
-                let project = Project::new()?;
+                let project = JavaProject::new()?;
                 let file = project.identify(f.as_str())?;
                 let result = if t.is_empty() {
                     file.test(Vec::<&str>::new(), Some(&project)).await
@@ -203,14 +259,52 @@ async fn run_cli() -> Result<()> {
                 }
             }
             JavaCmd::DocCheck(f) => {
-                let file = Project::new()?.identify(f.as_str())?;
+                let file = JavaProject::new()?.identify(f.as_str())?;
                 let out = file.doc_check().await?;
                 println!("{out}");
             }
             JavaCmd::Grade(g) => {
                 scripting::run_file(&g).await?;
             }
-            JavaCmd::Info => Project::new()?.info()?,
+            JavaCmd::Info => JavaProject::new()?.info()?,
+        },
+        Cmd::Python(python_cmd) => match python_cmd {
+            PythonCmd::Run(f) => {
+                let file = PythonProject::new()?.identify(f.as_str())?;
+                match file.run(None).await {
+                    Ok(out) => println!("{out}"),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            PythonCmd::Check(f) => {
+                let file = PythonProject::new()?.identify(f.as_str())?;
+                match file.check().await {
+                    Ok(out) => println!("{out}"),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            PythonCmd::Test(f) => {
+                let file = PythonProject::new()?.identify(f.as_str())?;
+                match file.test().await {
+                    Ok(out) => println!("{out}"),
+                    Err(e) => {
+                        eprintln!("{:#?}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            PythonCmd::Grade(g) => {
+                scripting::run_file(&g).await?;
+            }
+            PythonCmd::Info => {
+                PythonProject::new()?.info();
+            }
         },
         Cmd::Update => match update() {
             Ok(_) => {}
