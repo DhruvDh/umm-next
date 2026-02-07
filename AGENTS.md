@@ -5,25 +5,32 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
 
 ## 1. Before You Start
 
-- Open `context.md` for the latest architectural notes and roadmap (“Project
-  File Map” and “Plan” sections must be current). If it feels outdated, update
+- Open `context.md` for the latest architectural notes and roadmap (`Project
+  File Map` and `Plan` sections must be current). If it feels outdated, update
   it as you work.
+- Treat `Project File Map` as a curated operational map, not an exhaustive tree
+  dump. Keep high-signal entries only:
+  - module roots,
+  - runtime/config entrypoints,
+  - scripting installation points,
+  - key grading surfaces,
+  - and short rationale for why each group matters.
 - Review the current git diff and outstanding TODOs in code or `context.md`.
 
 ## 2. Working Guidelines
 
 - Prefer instance-scoped configuration (e.g., `ProjectPaths`) over global
   statics. Do **not** re-introduce the removed `lazy_static` path constants.
-- Rhai support is being removed. Do not resurrect Rhai helpers; instead push the
-  design towards the planned Rune integration.
+- Do not reintroduce removed scripting layers. Keep the runtime flow
+  Rune-centered unless an explicit design change is approved.
 - Mutation tests cannot be run inside the Codex sandbox; the user must run them
   locally to verify pass/fail.
 - For linting/tests: run `cargo fmt` and `cargo clippy --all-targets` before you
   hand back work. Use `cargo check` as needed, but clippy is the minimum bar.
 - Keep Rust test-only logic under `tests/` (integration tests); avoid new
   `#[cfg(test)]` blocks inside `src/` unless absolutely required.
-- Keep `context.md` untracked (Git ignores it) and update it whenever you make
-  structural/code-architecture changes.
+- Keep `context.md` tracked and update it in the same PR whenever
+  structural/code-architecture behavior changes.
 - When the work naturally splits into a commit, suggest or create a concise,
   descriptive commit message (e.g., “refactor: route project paths through
   ProjectPaths”).
@@ -48,7 +55,9 @@ Use it as a quick-reference checklist to stay aligned with project expectations.
 - Run `cargo fmt` and `cargo clippy --all-targets` and ensure they pass.
 - Update `context.md` with:
   - Any new architectural decisions.
-  - Changes to the “Project File Map” or “Plan”.
+  - Changes to `Plan`.
+  - Changes to `Project File Map` when architecture boundaries, entrypoints, or
+    ownership surfaces changed.
   - Notes future agents need to know.
 - Summarize the work in your final response, referencing files with
   `path:line` format where edits occurred.

@@ -1,467 +1,157 @@
-# Repository Context And Migration Notes
-
-> **Status — Updated 2025-12-04**
->
-> - **CLI `grade`:** Runs Rune scripts via `scripting::run_file` with installed `umm::{java, gradescope, config, retrieval}` modules; expects `async fn main()` returning `Result<()>` (type annotation optional).
-> - **Scripting:** Rune bindings expose state-erased grader builders, Gradescope config/helpers, config/retrieval toggles, and a `ProjectPaths` builder + `Project::from_paths` for custom layouts. Python bindings (embedded runtime) remain branch-only on `try-python-scripting`.
-> - **Rhai:** Entry flow removed; residual types compile but are inert without the Rhai entrypoint.
-> - **Integration:** ArrayList Rune fixture (`fixtures/rune/arraylist_all.rn`) exercises all graders (hidden tests commented); snapshots captured in `tests/rune_integration.rs`. Mutation grader currently fails under Java 21 due to PIT’s classfile support (see Known Gaps).
-> - **Module layout:** Java sources live under `src/java/*`; configuration and prompts live in `src/config.rs`; `src/constants.rs` is intentionally empty.
-> - **Active retrieval toggle:** Managed with an `std::sync::atomic::AtomicBool` stored in `config::ConfigState`.
-> - **Builders:** `bon 3.8` replaced the remaining `typed-builder` surfaces across graders/DTOs; builder getters enabled for inspection; list setters accept iterables via custom `with` closures; overwrite remains disallowed.
-
-## Table of Contents
-
-- [Repository Context And Migration Notes](#repository-context-and-migration-notes)
-  - [Table of Contents](#table-of-contents)
-  - [Onboarding Quickstart (main)](#onboarding-quickstart-main)
-  - [CLI Contract (main)](#cli-contract-main)
-  - [Environment Variables (main)](#environment-variables-main)
-  - [High-Level Overview](#high-level-overview)
-  - [Agent Operating Rules](#agent-operating-rules)
-  - [Glossary](#glossary)
-  - [Major Changes Completed](#major-changes-completed)
-  - [Module Map (Authoritative)](#module-map-authoritative)
-  - [Important Code References](#important-code-references)
-  - [CLI Behavior (Post-Refactor)](#cli-behavior-post-refactor)
-  - [Paths \& Configuration Model](#paths--configuration-model)
-  - [Java Analysis Pipeline (At a Glance)](#java-analysis-pipeline-at-a-glance)
-  - [Scripting Strategy (Decision Record)](#scripting-strategy-decision-record)
-    - [Option snapshots](#option-snapshots)
-    - [Deferred — Rune Integration Sketch](#deferred--rune-integration-sketch)
-  - [Prompts, Env, and Global Config](#prompts-env-and-global-config)
-  - [Design Rationale \& Invariants](#design-rationale--invariants)
-  - [Definition of Done (main)](#definition-of-done-main)
-  - [Cleanup Checklist](#cleanup-checklist)
-  - [Plan (Keep Updated)](#plan-keep-updated)
-    - [Slice-Copy Workflow (Repeatable)](#slice-copy-workflow-repeatable)
-  - [Known Gaps / Open Items](#known-gaps--open-items)
-  - [How To Continue (Concrete Next Steps)](#how-to-continue-concrete-next-steps)
-  - [Gotchas](#gotchas)
-  - [Quick Test Checklist](#quick-test-checklist)
-  - [Contact Points (Authoritative)](#contact-points-authoritative)
-  - [Doc Maintenance Commands](#doc-maintenance-commands)
-  - [Appendices (Dev-only)](#appendices-dev-only)
-    - [Appendix A — Python Prototype Notes (Branch Only)](#appendix-a--python-prototype-notes-branch-only)
-      - [Branch \& Goal](#branch--goal)
-      - [When to use which workflow](#when-to-use-which-workflow)
-      - [Progress Snapshot (2025-09-27)](#progress-snapshot-2025-09-27)
-      - [Python Surface Inventory](#python-surface-inventory)
-      - [Open Questions \& Risks](#open-questions--risks)
-      - [Build \& Linking Notes (macOS arm64)](#build--linking-notes-macos-arm64)
-      - [Validation Tips](#validation-tips)
-      - [Coverage Gaps](#coverage-gaps)
-      - [Decision Reminder](#decision-reminder)
-  - [Doc Change Log](#doc-change-log)
-
-## Onboarding Quickstart (main)
-
-1. **Clone and hydrate fixtures**
-   - `git clone <repo-url>`
-   - `git submodule update --init --recursive`
-2. **Build and lint**
-   - `cargo check`
-   - `cargo fmt && cargo clippy --all-targets`
-3. **Run core commands** *(requires JDK + JUnit jars on your classpath)*
-   - `umm java run <ClassWithMain>`
-   - `umm java test <TestClass> [tests...]`
-   - `umm java doc-check <Class>`
-   - `umm grade <path/to/script.rn>` → compiles and executes the Rune script’s async `main()`.
-4. **Read the code in this order**
-   - Paths: `src/java/paths.rs`
-   - Config/runtime: `src/config.rs`
-   - Graders: `src/java/grade/*`
-   - CLI wiring: `src/main.rs`
-
-## CLI Contract (main)
-
-| Command                     | Inputs                            | Side-effects                                | Exit conditions                                |
-|-----------------------------|-----------------------------------|----------------------------------------------|------------------------------------------------|
-| `umm java run <ClassWithMain>`   | Java class with `main`            | Compiles and runs via `Project::run`          | `0` on success; non-zero on compile/run failure |
-| `umm java check <Class>`         | Java class name                   | Compiles and prints diagnostics               | `0` on success; non-zero on compiler errors     |
-| `umm java test <TestClass> …`    | Test class, optional test names   | Runs JUnit on existing classpath              | `0` on pass; non-zero on failing tests          |
-| `umm java doc-check <Class>`     | Java class name                   | Runs `javac -Xdoclint` for documentation lint | `0` on clean; non-zero on warnings/errors       |
-| `umm grade <path/to/script.rn>` | Rune script path                   | Compiles then executes the script’s async `main()` | `0` on script success; non-zero on compilation/runtime error |
-
-## Environment Variables (main)
-
-| Variable                  | Purpose                                  | Default / behavior                                        | Consumed in               |
-|---------------------------|------------------------------------------|-----------------------------------------------------------|---------------------------|
-| `SUPABASE_URL`            | Supabase PostgREST endpoint               | Optional; only required when publishing feedback          | `src/config.rs` (`SupabaseEnv`)
-| `SUPABASE_ANON_KEY`       | Supabase PostgREST anon key               | Optional; only required when publishing feedback          | `src/config.rs` (`SupabaseEnv`)
-| `OPENAI_API_KEY` (+ deps) | OpenAI feedback / SLO requests            | Optional; loaders error only when those features are used | `src/config.rs` (`OpenAiEnv`)
-| `UMM_RETRIEVAL_ENDPOINT`  | Active retrieval backend URL              | Defaults to historical Deno endpoint                      | `src/config.rs`
-| `UMM_COURSE`              | Course identifier surfaced in metadata    | Defaults to `ITSC 2214`                                   | `src/config.rs`
-| `UMM_TERM`                | Academic term surfaced in metadata        | Defaults to `Fall 2022`                                   | `src/config.rs`
-| `UMM_JAVAC_TIMEOUT_SECS`  | Max seconds allowed for `javac` invocations | Defaults to `30`; larger values risk long hangs           | `src/config.rs`
-| `UMM_JAVA_TIMEOUT_SECS`   | Max seconds allowed for `java` / JUnit runs | Defaults to `60`; raise for long-running submissions      | `src/config.rs`
-| `JAVA_HOME` / `PATH`      | Locate `javac` / `java` for CLI commands  | Must resolve to a working JDK in the environment          | External toolchain        |
-
-## High-Level Overview
-
-- Goal: Remove Rhai-era coupling and land on a stable scripting surface with per-project configuration driven by `ProjectPaths`.
-- The tool grades Java submissions: it compiles, runs, and tests code, then uses LLM-powered feedback.
-- Key crates and libraries (main): `tokio`, `reqwest`, `tree-sitter` (Java grammar), `bpaf`, `serde`, `axum`, `postgrest`.
-  - *Trial (branch-only):* embedded Python runtime via PyO3/PyOxidizer — see Appendix.
-
-## Agent Operating Rules
-
-- Treat this document as the single source of architecture truth; update it whenever logic or roadmap shifts.
-- Update the **Module Map**, **Cleanup Checklist**, and **Plan** sections when you change structure or priorities.
-- Wait for user sign-off on proposed edits before touching repository files.
-- Keep `context.md` untracked in version control; regenerate the sections you alter for handoff.
-- Use the review mindset: focus on ergonomics for “data bag” modules and on separation of concerns for graders and parsers.
-
-## Glossary
-
-- **Rhai** — previous scripting engine; entry points removed; residual types compile but are inert without the Rhai runtime.
-- **Rune** — deferred scripting design retained for future reference; not active on `main`.
-- **Embedded Python** — trial feature on `try-python-scripting` bundling a Python runtime inside the CLI to run `umm grade <script.py>`.
-- **ProjectPaths** — instance-scoped path model providing `root/src/build/test/lib/.umm` accessors; eliminates global path state.
-- **SLO** — service level objective prompts/payloads used when emitting higher fidelity feedback.
-- **PITest** — Java mutation testing integration that writes `test_reports/mutations.csv` when enabled.
-
-## Major Changes Completed
-
-- Removed the `umm_derive` proc-macro crate and eliminated generated `_script` wrappers across the codebase.
-- Disabled the Rhai script entry path; `lib::grade` returns a clear “temporarily unavailable” error on main.
-- Deleted VSCode tasks/settings generators; manual cleanup remains available via
-  `Project::clean_paths`, but the CLI `clean` command has been removed.
-- Introduced `ProjectPaths` and routed all compile/run/test logic through instance-scoped paths; removed legacy globals from `src/constants.rs`.
-- Added `src/config.rs` to centralize runtime bootstrapping, prompt loading, Supabase access (cached via `state::InitCell<Postgrest>`), shared HTTP client, and the active-retrieval toggle (`AtomicBool`).
-- Removed the bundled JAR download workflow; `Project` no longer fetches artifacts and instead respects whatever is on the classpath.
-- Switched Supabase and OpenAI usage to lazy initialization so commands that do not need them run without credentials.
-- Improved grader feedback rendering: penalties print inline and degrade gracefully when external services are unavailable.
-- Hardened file/runtime ergonomics post-Rhai removal, including accurate `FileType` classification and safer snippet rendering helpers.
-- Migrated all graders/Gradescope/diagnostic DTOs to `bon` builders (3.8.1) with iterable-friendly setters and builder getters; added lightweight integration smoke tests under `tests/bon_builders_smoke.rs`.
-
-## Module Map (Authoritative)
-
-- **Scope note:** The Module Map lists **main** only. Branch-only files (e.g., the Python prototype) are documented in the Appendix.
-
-- `src/java/mod.rs` — Module root re-exporting the Java subsystems (`file`, `parser`, `paths`, `project`, `grade`).
-- `src/java/config.rs` — Java-specific configuration bundle (prompts, retrieval defaults, timeouts).
-- `src/java/paths.rs` — `ProjectPaths` definition plus accessors for `root`, `src`, `build`, `test`, `lib`, `.umm`, and separators.
-- `src/java/parser.rs` — Tree-sitter Java parser wrapper; owns `Parser`, per-file `Tree` caching, and helpers for executing SCM query patterns.
-- `src/java/file.rs` — `FileType`, `File`, `JavaFileError`, and compile/run/test/doc-check orchestration atop `ProjectPaths`.
-- `src/java/project.rs` — Project discovery and submission description utilities; coordinates `ProjectPaths` usage (JAR downloads removed).
-- `src/java/grade/`
-  - `context.rs` — Retrieval/context builder (heuristic windows, snippet formatting).
-  - `diff.rs` — Diff-based grader wiring against `GradeResult`.
-  - `docs.rs` — Doclint-driven grader.
-  - `feedback.rs` — FEEDBACK file + Supabase/OpenAI persistence helpers.
-  - `gradescope.rs` — Gradescope payload generation and SLO prompts.
-  - `query.rs` — Tree-sitter query graders; filter predicates now use native Rust closures and Vec outputs.
-  - `results.rs` — `GradeResult`, `Grade`, `LineRef`, and supporting types.
-  - `tests.rs` — Unit/hidden test graders and PIT hooks.
-  - `diagnostics.rs` — Diagnostic structs shared across graders.
-  - `mod.rs` — Grader module exports.
-- `src/java/queries/` — String resources / helpers for Tree-sitter SCM patterns.
-- `src/java/util.rs` — Java-specific toolchain and path helpers (`classpath`, `sourcepath`).
-- `src/util.rs` — Shared helpers (`umm_path`, `find_files`).
-- `src/lib.rs` — Crate root exporting configuration, Java helpers, process utilities, retrieval, scripting runtime, and shared types.
-- `src/main.rs` — CLI wiring via `bpaf`; dispatches to library commands and executes Rune grading scripts.
-- `src/scripting/rune/mod.rs` — Rune installer glue (`install_all_modules`); shared error helper.
-- `src/scripting/rune/modules/` — Rune module installers:
-  - `java.rs` — Project + grader wrappers, GradeResult/DiffCase wrappers, helpers (`show_results`, `grade_all`).
-  - `gradescope.rs` — GradescopeConfig wrapper and enums.
-  - `config.rs` — Active-retrieval toggle + heuristic setters.
-  - `retrieval.rs` — HeuristicConfig wrapper + apply.
-- `src/config.rs` — Runtime/env bootstrap: loads prompts, Supabase metadata, HTTP client, retrieval endpoint, and active-retrieval flag.
-- `src/retrieval.rs` — Retrieval modes (`Full`, `Heuristic`, `Active`) and the `RetrievalFormatter` trait implemented by language modules.
-- `src/scripting/mod.rs` — Rune VM bootstrapper (`Context`, `Unit`, `Vm`) plus the entrypoint used by `umm java grade`.
-- `src/scripting/java.rs` — `umm::java` Rune module: builders for Docs/Unit/Diff graders, `Project` helpers, and `show_results`.
-- `fixtures/java/` — Java fixtures for integration tests; initialize submodules with `git submodule update --init --recursive`.
-- `fixtures/rune/` — Rune scripts used by integration tests (`happy.rn`, `missing_required.rn`, `gradescope_json.rn`).
-- `examples/sample.rn` — Reference Rune script demonstrating Docs/Unit/Diff graders and `show_results`.
-- `tests/rune_integration.rs` — CLI-level Rune integration tests (happy path, missing required fields, Gradescope JSON debug).
-
-## Important Code References
-
-- Paths & project layout: `src/java/paths.rs`, `src/java/project.rs`, `src/java/mod.rs`
-- Classpath/sourcepath helpers: `src/java/util.rs`
-- CLI wiring: `src/main.rs`
-- Graders & feedback: `src/java/grade/*`
-- Retrieval heuristics: `src/retrieval.rs`, `src/java/grade/context.rs`
-- Env/services/prompts/runtime: `src/config.rs`
-
-## CLI Behavior (Post-Refactor)
-
-- `java run <ClassWithMain>` / `java check <Class>` / `java test <TestClass> [tests...]` / `java doc-check <Class>`:
-    - Operate via `Project::new()` and instance-scoped `ProjectPaths`.
-    - Assume required JUnit jars are already on the classpath (no downloads).
-- `grade` (main):
-    - Executes a Rune script via `scripting::run_file`, expecting an async `pub fn main() -> Result<(), String>`.
-    - Surface script or grader failures with contextual error messages.
-
-## Paths & Configuration Model
-
-- `ProjectPaths` instances supply all path derivations; avoid global statics.
-- Helpers like `classpath(&ProjectPaths)` and `sourcepath(&ProjectPaths)` live in `src/java/util.rs`.
-- Configuration lives in `src/config.rs`, which wraps the shared runtime, HTTP client, prompt catalog, and Supabase metadata; it lazily caches the PostgREST client via a `state::InitCell<Postgrest>` and tracks active retrieval with an `AtomicBool`.
-
-## Java Analysis Pipeline (At a Glance)
-
-1. `Project::new()` discovers Java files and attaches `ProjectPaths`.
-2. `File` objects parse sources through `Parser::new(code)`.
-3. Graders query parsed trees using patterns from `src/java/queries.rs`.
-4. Grader modules emit `GradeResult` values consumed by CLI feedback.
-
-## Scripting Strategy (Decision Record)
-
-- **Decision (current state)**: `umm grade` executes Rune scripts via `scripting::run_file` with `umm::{java, gradescope, config, retrieval}` modules installed. Scripts export `pub async fn main() { ... Ok(()) }` (return type can be elided) and use state-erased builder wrappers for graders. Python bindings remain experimental on `try-python-scripting`.
-- **Next steps (todo)**:
-  - Keep Rune surface stable (namespace `umm::java::...`) while we explore `umm::python` as a parallel module.
-  - Harden sandboxing/timeouts before exposing user-written network/file operations; module install is centralized in `scripting::rune::install_all_modules`.
-  - Grow fixtures and snapshots as new graders/helpers are added (query grader now covered via `fixtures/rune/query.rn`).
-
-## Prompts, Env, and Global Config
-
-- Core handles live in `src/config.rs`; they are wrapped inside `ConfigState` and cached via `Arc<ConfigState>`.
-- Shared APIs (selected):
-  - `config::runtime() -> Arc<Runtime>` — shared Tokio runtime.
-  - `config::http_client() -> reqwest::Client` — shared HTTP client (proxy disabled for sandbox compatibility).
-  - `config::java_config() -> JavaConfigRef` — read-only access to the Java config bundle (prompts, timeouts).
-  - `config::java_prompts() -> JavaPromptsRef` — convenience wrapper for the Java prompt catalog.
-  - `config::postgrest_client() -> Option<Postgrest>` — lazily caches the Supabase PostgREST client using `state::InitCell<Postgrest>`.
-  - `config::retrieval_endpoint() -> String` — returns the configured active-retrieval endpoint.
-  - `config::heuristic_defaults()` / `set_heuristic_defaults(...)` — read/update snippet heuristics.
-  - `config::set_active_retrieval(enabled: bool)` / `config::active_retrieval_enabled() -> bool` — atomically manage the active-retrieval flag (`AtomicBool`).
-- Retrieval helpers reuse the shared `reqwest::Client` and pull `UMM_RETRIEVAL_ENDPOINT` from environment, defaulting to the historical Deno service.
-- Snippet heuristics live in `HeuristicConfig`; builders update them via the config setters.
-
-## Design Rationale & Invariants
-
-- Paths must remain instance-scoped; avoid reintroducing globals.
-- Graders executed from Rune must be given an explicit `Project`; implicit discovery (`Project::new()`) is not used on the Rune path.
-- `grade` executes Rune scripts with `umm` modules installed; keep the scripting namespace stable (`umm::java::...`) and builder wrappers state-erased.
-- Query grader wrappers default captures to `"body"` and expose `queries_with_capture(...)` so Rune scripts can pass captures explicitly without tripping `NoCaptureSelected`.
-- Grader snippet formatting should flow through `render_snippet` in `src/java/grade/context.rs`.
-
-## Definition of Done (main)
-
-- [ ] `cargo fmt && cargo clippy --all-targets` run cleanly.
-- [ ] `umm java run/test/doc-check` succeed against a sample project with JDK + JUnit jars available.
-- [ ] `cargo test rune_integration` (Rune fixtures + insta snapshots) passes deterministically.
-- [ ] Status banner is updated (date + scripting decision) when behavior changes.
-- [ ] Module Map lists only files present on `main` (no branch-only paths).
-- [ ] Active-retrieval behavior documented as `AtomicBool` with helpers (`set_active_retrieval`, `active_retrieval_enabled`).
-- [ ] No references to pre-split paths (`src/java.rs`, `src/grade.rs`).
-- [ ] README/docs updated when user-visible behavior shifts.
-
-## Cleanup Checklist
-
-> Work Mode: We are operating in a file-by-file cleanup cadence; cross-file work found during passes is captured as backlog and prioritized separately.
-
-- [x] `src/constants.rs` — Shared tree-sitter queries and retrieval toggles pulled into module scope; file now intentionally empty.
-- [x] `src/config.rs` — Runtime/env bootstrap with cached PostgREST handle (`state::InitCell<Postgrest>`), shared HTTP client, and `AtomicBool` toggle for active retrieval.
-- [x] `src/util.rs` — Path utilities (`classpath` / `sourcepath`) migrated to accept `&ProjectPaths`.
-- [x] `src/java/paths.rs` — Instance-scoped path model adopted across the project.
-- [x] `src/java/parser.rs` — Tree-sitter wrapper now surfaces errors via `anyhow`, caches capture indices, and exposes a fallible `set_code`.
-- [x] `src/java/grade/diagnostics.rs` — Diagnostic structs now capture severity/result enums and expose typed helpers.
-- [x] `src/java/grade/results.rs` — Base grading types updated; Rhai-era borrowing removed.
-- [x] `src/java/grade/context.rs` — Retrieval/context builder refactored and tested.
-
-Queue — Next File Passes (rolling 3–5)
-
-- [ ] `src/java/grade/query.rs`
-  - Goal: remove Rhai types (`AST`, `Array`, `FnPtr`, `SCRIPT_AST`) and model filters as typed predicates/closures; keep public behavior and error messages stable.
-  - Non-goals: change query semantics or SCM captures.
-  - Acceptance: compiles; `cargo clippy --all-targets` clean; existing query graders behave unchanged on fixtures; no Rhai types in public API.
-- [ ] `src/java/grade/tests.rs`
-  - Goal: replace `rhai::Array` with `Vec<String>` for `test_files`/`expected_tests` and tighten mismatch reporting; keep retrieval prompts identical.
-  - Acceptance: identical outputs on fixtures; clearer missing/unexpected test messages; clippy clean.
-- [ ] `src/java/grade/gradescope.rs`
-  - Goal: remove `rhai::{Array, Map}`; use typed structs end-to-end; ensure emitted JSON stays identical.
-  - Acceptance: JSON shape/values stable on sample results; add minimal doc comments to public structs.
-- [ ] `src/java/grade/feedback.rs`
-  - Goal: drop `rhai::Array` in `generate_feedback`; operate on typed `Vec<GradeResult>`; keep Supabase flow as-is.
-  - Acceptance: FEEDBACK file content unchanged for penalties; clippy clean.
-- [ ] `src/parsers.rs`
-  - Goal: align PEG grammars with typed severities/results; improve Windows path note; add small tests for edge paths.
-  - Acceptance: tests cover missing filename cases and PIT CSV variances.
-
-Follow‑Ups (per-pass discoveries)
-
-- [x] `src/java/file.rs` — decomposed `File::new` into helpers (`parse_source`, `detect_file_identity`, `collect_test_methods`, interface/class section builders) and clarified docs; push_block already skips empty collections so no extra allocation cleanup needed.
-- [ ] `src/java/project.rs` — honor path overrides (CLI/env), remove discovery panics, tighten runtime spawning/cache logic.
-- [x] `src/java/grade/diff.rs` — Console diffs now use `owo-colors` while prompts stay ANSI-free; further regression coverage deferred.
-- [ ] `src/java/grade/docs.rs` — finish guard rails for missing filenames in javac output; ensure prompt truncation/tables remain consistent.
-- [ ] `src/java/grade/mod.rs`, `src/java/mod.rs` — audit exports/visibility after grader refactors.
-- [ ] `src/lib.rs`, `src/main.rs` — revisit once scripting path lands; re-enable `grade` behind a feature gate.
-
-Recent Cleanups (reference)
-
-- 2025-10-09 — diff grader prompts/typed cases modernized.
-- 2025-10-04 — javac diagnostics guarded against missing filenames.
-- 2025-09-30 — diagnostic severities and PIT results typed.
-- 2025-09-28 — parser error handling tightened; `context.md` status/plan refreshed; `.gitignore` updated to keep `context.md` untracked.
-
-## Plan (Keep Updated)
-
-- [x] Move prompt/env configuration into `src/config.rs` with a cached PostgREST handle and AtomicBool-backed retrieval toggle.
-- [x] Split `src/java` into a folder module and re-home path helpers on `ProjectPaths`.
-- [x] Split `grade.rs` into `src/java/grade/` submodules using the slice-copy workflow.
-- [x] Retire legacy CLI surfaces (`create-submission`, `check-health`, `serve_project_code`).
-- [ ] Replace remaining Rhai types (`rhai::Array`, `FnPtr`, `SCRIPT_AST`) with native equivalents.
-- [ ] Decide on the long-term scripting path (Rune vs embedded Python trial) and re-enable `grade` behind a feature flag.
-- [ ] Harden embedded Python runtime pipeline (document PyOxidizer setup, add smoke test for `umm grade script.py`).
-- [ ] Expand `ProjectPaths` customization (alternative roots, multi-module support).
-- [ ] Refresh public docs (`README`, `docs/`) once scripting direction is final.
-
-### Slice-Copy Workflow (Repeatable)
-
-1. Move the target source into the destination `mod.rs` temporarily.
-2. Use a throwaway script to slice exact text ranges into new files (anchor on struct/impl headers or doc comments).
-3. Remove the sliced blocks from `mod.rs`, then add `mod` declarations and `pub use` re-exports.
-4. Fix imports/visibility with the narrowest scope (`pub(crate)` when possible) and adjust relative paths for `include_str!` assets.
-5. Run `cargo fmt` and `cargo clippy --all-targets` to validate the split.
-
-## Known Gaps / Open Items
-
-- Decide between Rune and Python once the branch evaluation concludes; update the Status banner immediately afterward.
-- Improve Python bindings ergonomics if the trial continues (remove Rhai callback shims, finalize error mapping).
-- Determine packaging strategy for any embedded runtime (CI, distribution, cross-platform story).
-- Expand retrieval configuration exposure (builder-style overrides for heuristics and endpoints).
-- Track outstanding PEG/parser refactors needed before Rune work resumes.
-- PIT mutation grader fails on the ArrayList fixtures when compiled with Java 21 (class file major 65). Requires either pinning compilation to Java 17 or upgrading the bundled PIT jars; snapshots currently capture the failure output.
-- Diff Grader Modernization — Detailed Notes
-  - Status: initial clean-up applied — guards use logical `&&`, prompts route through `build_context_message` with user/system roles fixed, plain-text prompt bodies append the offending file’s source, diff failures surface an actionable reason, and stdin is always piped to avoid blocking.
-  - Rationale: `src/java/grade/diff.rs` predates the new retrieval/context APIs and still couples UI concerns (ANSI colors) to prompts while depending on Rhai containers. Modernizing it improves correctness, consistency across graders, and unblocks the Rhai removal.
-  - Remaining follow-ups:
-    - Provide compatibility shims if external scripts still rely on the old `set_expected` / `set_input` Rhai setters.
-    - Replace the `colored` crate usage with `owo-colors` (or similar) so terminal colour support is auto-detected without manual env toggles; ensure prompts remain colour-free regardless of the library.
-    - Add regression coverage (unit/integration) for the diff grader, especially zero-input cases to catch stdin regressions.
-    - Investigate migrating other graders (`tests.rs`, `docs.rs`, etc.) off `rhai::Array`/`FnPtr` once the compatibility layer is settled.
-  - Non-goals:
-    - Changing diff algorithm/semantics (still Patience + unicode word granularity).
-    - Re-enabling the top-level `grade` command or altering CLI surfaces.
-  - Acceptance criteria:
-    - `cargo check`, `cargo fmt`, and `cargo clippy --all-targets` pass.
-    - On mismatches, stderr shows a colorized local diff; the stored prompt contains no ANSI codes and uses correct message roles.
-    - On success, returns a full‑credit `GradeResult` with a clear “Got expected output” reason.
-    - No change in diff semantics or grading thresholds.
-
-## How To Continue (Concrete Next Steps)
-
-1. Config extension: expose mutation hooks on `config` for prompts/client overrides and document usage.
-2. Rhai removal: replace `rhai::Array`/`FnPtr` usage in graders, delete `SCRIPT_AST` once query filtering is redesigned.
-3. Scripting prototype: decide Rune vs Python; if Rune wins, register `umm` bindings and ship a minimal `grade` flow behind a feature.
-4. Project paths: allow CLI/env overrides for alternate roots and multi-module layouts.
-5. Documentation: update README/docs to describe the path model and scripting status once the prototype stabilizes.
-
-## Gotchas
-
-- Avoid reintroducing global path state—everything should route through `ProjectPaths`.
-- `Project::new()` leverages the process runtime; be mindful of handle cloning before spawning tasks.
-- JUnit/PITest expectations rely on the caller’s classpath; ensure mutation runs can write `test_reports/mutations.csv` under the project root.
-- Legacy `clean()` is retained only as an erroring stub; use
-  `Project::clean_paths` if manual cleanup is required.
-
-## Quick Test Checklist
-
-- `cargo check` — should pass without warnings.
-- `cargo fmt` — format before handoff.
-- `cargo clippy --all-targets` — minimum lint bar.
-- `umm java run <ClassWithMain>` — runs the Java class with discovered paths.
-- `umm java test <TestClass> [tests...]` — uses existing classpath; ensure JUnit jars are present locally.
-- `umm java doc-check <Class>` — runs `javac -Xdoclint`.
-- `umm grade <path/to/script.rn>` — compiles and executes a Rune script (mainline behavior).
-
-## Contact Points (Authoritative)
-
-- Paths & layout: `src/java/paths.rs`, `src/java/project.rs`, `src/java/mod.rs`
-- Classpath/sourcepath & IO: `src/util.rs`
-- CLI wiring: `src/main.rs`
-- Graders & feedback: `src/java/grade/*`
-- Env/services/prompts/runtime: `src/config.rs`
-
-## Doc Maintenance Commands
-
-```bash
-# Find stale, pre-split file references
-rg -n "src/java.rs|src/grade.rs" context.md
-
-# Ensure active-retrieval wording stays accurate
-rg -n "Active retrieval|AtomicBool|InitCell|USE_ACTIVE_RETRIEVAL" context.md
-
-# Confirm no lingering jar-download references
-rg -n "jar download|JAR download|serve_project_code" context.md
-
-# Detect duplicate layout headings
-rg -n "Module Map|Current Module Layout|Project File Map" context.md
-```
-
-## Appendices (Dev-only)
-
-### Appendix A — Python Prototype Notes (Branch Only)
-
-*Developer only; none of this ships on `main`.*
-
-#### Branch & Goal
-
-- Branch: `try-python-scripting` (not merged).
-- Objective: evaluate an embedded Python runtime so `umm grade <script.py>` can run without an external interpreter.
-
-#### When to use which workflow
-
-- **Embedded runtime (PyOxidizer)** — primary target for shipping a bundled interpreter inside the CLI binary.
-- **Extension module (maturin/`python/tests`)** — local development convenience for iterating on PyO3 bindings.
-
-#### Progress Snapshot (2025-09-27)
-
-- Phase 1–3 complete: API inventory, surface design, build scaffolding.
-- Phase 4–5 in progress: conversion helpers, error layer, grader bindings (`Diff`, `ByUnitTest`, `Query`).
-- Phase 6 (validation/docs) queued pending branch decision.
-
-#### Python Surface Inventory
-
-- Wrappers: `PyProject`, `PyGradeResult`, `PyDocsGrader`, `PyDiffGrader`, `PyByUnitTestGrader`, `PyQueryGrader`.
-- Remaining work: expose hidden-test/UnitTest graders, expand query helpers beyond `method_invocations_with_name`, map domain errors precisely, and remove Rhai-backed `FnPtr` filters.
-
-#### Open Questions & Risks
-
-- Packaging/distribution: maturin vs embedded runtime; CI/wheel story unresolved.
-- Security & sandboxing for Python graders.
-- Cross-platform support once PyOxidizer is part of the build.
-
-#### Build & Linking Notes (macOS arm64)
-
-- `build.rs` regenerates PyOxidizer artifacts when `--features python` is enabled; set `PYOXIDIZER_CMD` if PyOxidizer is not on `PATH`.
-- Provide a local `pyo3-config.toml` pointing at a Homebrew Python framework (`/opt/homebrew/opt/python@3.13/...`) and export `PYO3_CONFIG_FILE` before building.
-- `cargo build --features python` plus symlinking `libumm.dylib` to `umm.cpython-<ver>-darwin.dylib` lets CPython import the module without maturin.
-
-#### Validation Tips
-
-- Example script: `python/examples/arraylist_graders.py` (requires Java toolchain in PATH).
-- Pytests: `PYTHONPATH=target/debug uv run --with pytest python -m pytest python/tests` (fails in restricted sandboxes; run locally when possible).
-
-#### Coverage Gaps
-
-- No wrappers for `ByHiddenTestGrader`/`UnitTestGrader` yet.
-- `PyQueryGrader` lacks the broader helper set (loop/conditional/class queries).
-- Conversion utilities still rely on `rhai::Array`; refactor graders to concrete Rust collections before merging.
-
-#### Decision Reminder
-
-- Treat these notes as exploratory. Mainline `grade` currently runs Rune scripts; update the Status banner if the scripting decision changes.
-
----
+# Repository Context (Operational Snapshot)
+
+This document is the current-state operating reference for this repository root. It is intentionally not a migration diary. It records what the system does now, which constraints are active now, and which work should happen next.
+
+## Status (2026-02-07)
+
+The repository is in a post-remediation state where both Java and Python grading flows execute Rune scripts through language-specific grade commands. The source of truth for command shape is `src/main.rs`, the source of truth for runtime configuration is `src/config.rs`, and the source of truth for scripting module installation is `src/scripting/rune/mod.rs` with module declarations in `src/scripting/rune/modules/mod.rs`.
+
+The central architectural decision is simple: the CLI is language-scoped (`java` and `python`), grading entrypoints are script-path only, and runtime behavior is controlled through `ConfigState` rather than scattered environment reads.
+
+## CLI Contract (Authoritative)
+
+The CLI is defined in `src/main.rs`.
+
+| Command | Arguments | Behavior |
+|---|---|---|
+| `umm java run` | `FILENAME` | Runs a Java file with a `main` method. |
+| `umm java check` | `FILENAME` | Checks Java syntax/compile diagnostics. |
+| `umm java test` | `FILENAME [TESTNAME...]` | Runs JUnit tests (optionally scoped to named tests). |
+| `umm java doc-check` | `FILENAME` | Runs Java doc checks. |
+| `umm java grade` | `SCRIPT_PATH` | Executes a Rune grading script for Java workflows. |
+| `umm java info` | none | Prints Java project metadata as JSON. |
+| `umm python run` | `FILENAME` | Runs a Python file. |
+| `umm python check` | `FILENAME` | Checks Python syntax. |
+| `umm python test` | `FILENAME` | Runs pytest on a test file. |
+| `umm python lint` | `[FILENAME...]` | Runs Ruff lint, defaulting to project root if omitted. |
+| `umm python format` | `[FILENAME...]` | Runs Black format, defaulting to project root if omitted. |
+| `umm python grade` | `SCRIPT_PATH` | Executes a Rune grading script for Python workflows. |
+| `umm python info` | none | Prints Python project metadata as JSON. |
+| `umm update` | none | Updates the `umm` binary from releases. |
+
+A top-level grade command is not part of the current interface.
+
+## Environment Variables (Authoritative)
+
+The environment contract below is derived from `src/config.rs`.
+
+| Variable | Purpose | Default / Fallback |
+|---|---|---|
+| `SUPABASE_URL` | Supabase base URL for feedback persistence | Optional; feature is skipped when unset or empty. |
+| `SUPABASE_ANON_KEY` | Supabase API key for PostgREST writes | Optional; feature is skipped when unset or empty. |
+| `OPENAI_ENDPOINT` | Base URL for OpenAI-compatible API | Required only when OpenAI-backed grading features are invoked. |
+| `OPENAI_API_KEY_SLO` | API key for OpenAI-backed SLO/code-review calls | Required only when those features are invoked. |
+| `OPENAI_MODEL` | Model identifier | Required only when OpenAI-backed flows are invoked. |
+| `OPENAI_TEMPERATURE` | Optional temperature override | Omitted when missing/invalid. |
+| `OPENAI_TOP_P` | Optional top-p override | Omitted when missing/invalid. |
+| `OPENAI_REASONING_EFFORT` | Reasoning effort hint | Defaults to `medium` when missing/unrecognized. |
+| `UMM_COURSE` | Course metadata | Defaults to `ITSC 2214`. |
+| `UMM_TERM` | Term metadata | Defaults to `Fall 2022`. |
+| `UMM_RETRIEVAL_ENDPOINT` | Active retrieval service endpoint | Empty or whitespace values are treated as unset and fall back to `DEFAULT_RETRIEVAL_ENDPOINT`. |
+| `UMM_JAVAC_TIMEOUT_SECS` | Timeout for `javac` work | Defaults to `30` seconds. |
+| `UMM_JAVA_TIMEOUT_SECS` | Timeout for Java/JUnit execution | Defaults to `60` seconds. |
+| `UMM_PYTHON_TIMEOUT_SECS` | General Python execution timeout | Defaults to `60` seconds. |
+| `UMM_PYTHON_LINT_TIMEOUT_SECS` | Python lint timeout | Defaults to `30` seconds. |
+| `UMM_PYTHON_TEST_TIMEOUT_SECS` | Python test timeout | Defaults to `120` seconds. |
+
+## Runtime/Config Model
+
+The runtime model centers on `ConfigState` in `src/config.rs`. `ConfigState` owns the shared HTTP client, lazy PostgREST client initialization, Java and Python config bundles, retrieval toggles, and timeout surfaces. This avoids configuration drift because call sites read from a single state object through accessor functions such as `python_lint_timeout()`, `python_test_timeout()`, and `retrieval_endpoint()`.
+
+Scripting execution is centralized in `src/scripting/mod.rs` and module installation is centralized in `src/scripting/rune/mod.rs`. The installed Rune namespace is `umm::{java, python, gradescope, config, retrieval}` according to `src/scripting/rune/modules/mod.rs`.
+
+This architecture keeps command handling thin in the CLI and pushes behavior into versioned, testable Rust modules.
+
+## Grading Reliability Semantics (Current)
+
+Java Gradescope artifact generation is designed to degrade gracefully for external-service faults when a valid `results.json` can still be emitted. In `src/java/grade/gradescope.rs`, failures in feedback/SLO subflows are captured as warnings, surfaced in per-test output text, summarized in submission-level output, and serialized into `extra_data.warnings`.
+
+Python code-review grading is designed to fail closed when structured model output is invalid. In `src/python/grade/code_review.rs`, model responses are parsed into a structured decision schema, a repair retry is attempted once on parse failure, and persistent parse failure yields a zero score with explicit failure rationale. Bounds checks in fallback JSON extraction prevent panic on malformed brace ordering.
+
+## Project File Map (Authoritative)
+
+Map inclusion rule: include paths only when they define architecture boundaries, runtime entrypoints, scripting installation, or grading behavior contracts. Use shell discovery (`ls --tree`, `find`, `rg --files`) for exhaustive listings.
+
+- CLI and runtime boundary (why it matters: this is the command contract and global behavior surface):
+  - `src/main.rs`
+  - `src/lib.rs`
+  - `src/config.rs`
+  - `src/process.rs`
+  - `src/retrieval.rs`
+
+- Scripting installation boundary (why it matters: this determines which `umm::*` APIs scripts can call):
+  - `src/scripting/mod.rs`
+  - `src/scripting/rune/mod.rs`
+  - `src/scripting/rune/modules/mod.rs`
+  - `src/scripting/rune/modules/java.rs`
+  - `src/scripting/rune/modules/python.rs`
+  - `src/scripting/rune/modules/gradescope.rs`
+  - `src/scripting/rune/modules/config.rs`
+  - `src/scripting/rune/modules/retrieval.rs`
+
+- Java architecture root and grading surfaces (why it matters: these files define Java project discovery, parsing, and score/report generation):
+  - `src/java/mod.rs`
+  - `src/java/project.rs`
+  - `src/java/file.rs`
+  - `src/java/parsers.rs`
+  - `src/java/grade/mod.rs`
+  - `src/java/grade/results.rs`
+  - `src/java/grade/gradescope.rs`
+  - `src/java/grade/feedback.rs`
+  - `src/java/grade/context.rs`
+
+- Python architecture root and grading surfaces (why it matters: these files define Python project discovery, runtime execution, and pass/fail grading semantics):
+  - `src/python/mod.rs`
+  - `src/python/project.rs`
+  - `src/python/file.rs`
+  - `src/python/config.rs`
+  - `src/python/grade/mod.rs`
+  - `src/python/grade/results.rs`
+  - `src/python/grade/code_review.rs`
+  - `src/python/grade/context.rs`
+
+## Current Risks
+
+The architecture is stable, but four active risks remain and should shape near-term work. First, external dependencies (OpenAI/Supabase/networked retrieval) remain failure-prone, so warning telemetry and fallback messages must stay regression-tested. Second, parser behavior now includes Windows-path handling in Java diagnostics, but this remains a compatibility surface that can regress quietly without fixture coverage expansion. Third, model-output contracts in Python code review are more robust than before but still rely on prompt/schema discipline, so parser and retry behavior must remain tightly tested. Fourth, command and documentation drift can return quickly because the CLI surface is broad across two language trees.
+
+## Plan
+
+This roadmap is intentionally execution-oriented and tied to concrete outcomes.
+
+1. Owner: Maintainer responsible for grading runtime. Deliverable: harden resilience telemetry in Gradescope JSON.
+Outcome: warning codes and scopes remain stable and machine-consumable, and regressions are caught by integration tests.
+Acceptance: warnings appear in `tests[].output`, submission `output`, and `extra_data.warnings` for simulated external failures.
+
+2. Owner: Maintainer responsible for Python grading. Deliverable: expand structured-response robustness tests in code-review grading.
+Outcome: malformed model output cannot crash grading and always follows retry then fail-closed semantics.
+Acceptance: integration tests cover malformed ordering, missing braces, and non-JSON payloads with deterministic zero-score outcomes after retry exhaustion.
+
+3. Owner: Maintainer responsible for cross-platform diagnostics. Deliverable: strengthen Java parser fixtures for path and diagnostic edge cases.
+Outcome: diagnostic parsing remains stable across Unix-style and Windows-style path formats without platform regressions.
+Acceptance: parser tests include representative drive-letter and mixed-separator cases and preserve existing Unix behavior.
+
+4. Owner: Maintainer responsible for doc-runtime consistency. Deliverable: add a lightweight doc consistency check workflow.
+Outcome: command and environment tables in `context.md` stay aligned with `main.rs` and `config.rs`.
+Acceptance: pre-merge check confirms documented commands/env variables still exist in code.
+
+## Working Rules For Future Updates
+
+When architecture changes, update this file in the same pull request. Keep this document source-aligned: if a claim is not directly verifiable in repository code, remove it. Keep the narrative focused on current behavior, current risk, and next work. Do not append prototype archives or historical migration notes here.
+
+## Quick Validation Checklist
+
+Run these before handing off substantial changes:
+
+- `cargo fmt`
+- `cargo clippy --all-targets`
+- `cargo test`
+- `cargo test --test gradescope_resilience_tests`
+
+For command-surface spot checks:
+
+- `umm java grade SCRIPT_PATH`
+- `umm python grade SCRIPT_PATH`
 
 ## Doc Change Log
 
-- 2025-12-04: Rune surface tightened: QueryGrader wrapper now sets captures (or accepts `queries_with_capture`), avoiding runtime `NoCaptureSelected`; added Rune fixtures/snapshots (happy, missing_required, gradescope_json, query) and refreshed task/report/tutorial accordingly.
-- 2025-12-04: Classpath construction made deterministic (ordered build/lib/wildcard + shallow jar scans with stable dedupe); `Project::with_paths` now rebuilds file/name caches; Rune graders require explicit `Project` injection.
-- 2025-12-04: Replaced remaining `typed-builder` usage with `bon` (3.8.1); enabled builder getters, iterable setters, and `bon::vec!` helpers; added smoke tests for builder ergonomics and refreshed README to point Rune users at the bon builder surface.
-- 2025-12-05: Centralized `ProjectPaths` defaults (single helper for new/from_parts/builder) and exposed `report_dir`; Rune module now leans on bon builders instead of hand-written required-field lists; PIT argument/report helpers shared with tests + trimmed PIT Rune snapshots (kept one success + one failure path).
-- 2025-10-16: Relocated Java-only prompt/query assets and parser helpers into
-  `src/java/`, moved classpath/sourcepath utilities alongside them, and scoped
-  config prompts under a `JavaConfig` bundle (`java_prompts()` accessor retained);
-  left TODO breadcrumbs on
-  `ProjectPaths` / `Project` to surface configurable workspace layouts when a
-  typed builder lands.
-- 2025-10-15: Documented the `src/java/file.rs` refactor—`File::new` now delegates to
-  helper functions (`parse_source`, `detect_file_identity`, `collect_test_methods`,
-  `build_description`, plus interface/class section helpers) to keep construction,
-  retrieval summaries, and testing-focused logic separate.
-- 2025-09-28: Added onboarding quickstart, CLI contract, env/glossary tables, clarified config/AtomicBool behavior, tightened scripting decision record + appendix, and documented maintenance commands.
+- 2026-02-07: Rewrote `context.md` as an operational snapshot, aligned command/config contracts to live code, added authoritative `Project File Map` and execution-oriented `Plan`, and removed legacy prototype/migration narrative.
