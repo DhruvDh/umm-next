@@ -24,7 +24,10 @@ where
 {
     refs.into_iter()
         .map(Into::into)
-        .filter(|line_ref| project.contains(line_ref.file_name()))
+        // build_context_message resolves refs through `Project::identify`, so
+        // keep only uniquely resolvable refs here. Ambiguous names are valid
+        // membership matches but unsafe for context expansion.
+        .filter(|line_ref| project.identify(line_ref.file_name()).is_ok())
         .collect()
 }
 
