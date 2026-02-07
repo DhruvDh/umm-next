@@ -6,7 +6,7 @@
 //! This module provides grading functionality that uses LLM to analyze code
 //! quality and provide detailed feedback, similar to the original grader.py.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use async_openai::{
     Client as OpenAIClient,
     config::OpenAIConfig,
@@ -74,6 +74,51 @@ pub struct CodeReviewGrader {
     execute_files:       bool,
 }
 
+/// Structured code-review decision emitted by the LLM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodeReviewDecision {
+    /// Whether the submission passes the code-review gate.
+    pass:              bool,
+    /// Markdown feedback shown to the student.
+    feedback_markdown: String,
+    /// Optional reasons attached to the decision.
+    #[serde(default)]
+    reasons:           Vec<String>,
+}
+
+/// Parses a JSON decision payload from model output.
+fn parse_review_decision(content: &str) -> Result<CodeReviewDecision> {
+    serde_json::from_str(content).or_else(|_| {
+        let start = content
+            .find('{')
+            .context("Could not find JSON object start in model response")?;
+        let end = content
+            .rfind('}')
+            .context("Could not find JSON object end in model response")?;
+        let slice = &content[start..=end];
+        serde_json::from_str(slice).context("Failed to parse extracted JSON")
+    })
+}
+
+/// Sends chat-completion request and returns assistant text.
+async fn request_model_review(
+    client: &OpenAIClient<OpenAIConfig>,
+    model: &str,
+    messages: Vec<ChatCompletionRequestMessage>,
+) -> Result<String> {
+    let request = CreateChatCompletionRequestArgs::default()
+        .model(model)
+        .messages(messages)
+        .temperature(0.2)
+        .build()?;
+    let response = client.chat().create(request).await?;
+    Ok(response
+        .choices
+        .first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_else(|| "No review generated".to_string()))
+}
+
 impl CodeReviewGrader {
     /// Builds and runs the grader.
     pub async fn run(self) -> Result<GradeResult> {
@@ -89,10 +134,10 @@ impl CodeReviewGrader {
         let openai =
             config::openai_env().ok_or_else(|| anyhow!("OpenAI environment not configured"))?;
 
-        // Build the grading prompt
         let mut prompt_content = String::new();
+        let mut runtime_gate_passed = true;
+        let mut runtime_failures = Vec::new();
 
-        // Add instructions if available
         if let Some(ref path) = self.instructions_path
             && let Ok(content) = std::fs::read_to_string(path)
         {
@@ -102,7 +147,6 @@ impl CodeReviewGrader {
             prompt_content.push_str("\n```\n\n");
         }
 
-        // Add file contents and execution results
         prompt_content.push_str("## Python Files\n\n");
 
         for file_name in &self.files {
@@ -123,7 +167,6 @@ impl CodeReviewGrader {
             prompt_content.push_str(file.code());
             prompt_content.push_str("\n```\n\n");
 
-            // Execute if requested
             if self.execute_files && file.has_main() {
                 prompt_content.push_str("#### Execution Output\n\n");
                 match file.run(None).await {
@@ -133,21 +176,33 @@ impl CodeReviewGrader {
                         prompt_content.push_str("\n```\n\n");
                     }
                     Err(e) => {
+                        runtime_gate_passed = false;
+                        runtime_failures.push(format!("{}: {}", file.file_name(), e));
                         prompt_content.push_str(&format!("**Error:** {}\n\n", e));
                     }
                 }
             }
         }
 
-        // Build messages
+        prompt_content.push_str("## Feedback Template\n\n");
+        prompt_content.push_str(prompts.code_review_template());
+        prompt_content.push_str(
+            "\n\n## Required Output Format\nRespond with ONLY valid JSON (no markdown \
+             fences):\n{\"pass\": <bool>, \"feedback_markdown\": <string>, \"reasons\": \
+             [<string>, ...]}",
+        );
+
         let mut messages: Vec<ChatCompletionRequestMessage> = vec![
             ChatCompletionRequestSystemMessageArgs::default()
-                .content(prompts.system_message().to_string())
+                .content(format!(
+                    "{}\n\nYou must decide pass/fail and return JSON only in the exact schema \
+                     requested by the user message.",
+                    prompts.system_message()
+                ))
                 .build()?
                 .into(),
         ];
 
-        // Add weekly context if available
         if let Some(ref path) = self.weekly_context_path
             && let Ok(content) = std::fs::read_to_string(path)
         {
@@ -166,36 +221,87 @@ impl CodeReviewGrader {
                 .into(),
         );
 
-        // Make the API call
         let client = OpenAIClient::with_config(
             OpenAIConfig::new()
                 .with_api_base(&openai.endpoint)
                 .with_api_key(&openai.api_key),
         );
+        let mut prompt_messages = messages.clone();
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&openai.model)
-            .messages(messages.clone())
-            .temperature(0.6)
-            .build()?;
+        let first_review =
+            request_model_review(&client, &openai.model, prompt_messages.clone()).await?;
+        let decision = match parse_review_decision(&first_review) {
+            Ok(parsed) => parsed,
+            Err(first_parse_err) => {
+                let repair_message = ChatCompletionRequestUserMessageArgs::default()
+                    .content(format!(
+                        "Your previous response was not valid JSON for the required schema. \
+                         Return ONLY valid JSON with keys `pass`, `feedback_markdown`, and \
+                         `reasons` (array of strings).\n\nPrevious response:\n{}",
+                        first_review
+                    ))
+                    .build()?
+                    .into();
+                prompt_messages.push(repair_message);
+                let second_review =
+                    request_model_review(&client, &openai.model, prompt_messages.clone()).await?;
+                match parse_review_decision(&second_review) {
+                    Ok(parsed) => parsed,
+                    Err(second_parse_err) => {
+                        let runtime_status = if self.execute_files {
+                            if runtime_gate_passed {
+                                "passed"
+                            } else {
+                                "failed"
+                            }
+                        } else {
+                            "bypassed"
+                        };
+                        let reason = format!(
+                            "Failed to parse structured code-review decision after one \
+                             retry.\n\nFirst parse error: {first_parse_err:#}\nSecond parse \
+                             error: {second_parse_err:#}\nRuntime gate: {runtime_status}\n\nFirst \
+                             response:\n{first_review}\n\nSecond response:\n{second_review}"
+                        );
+                        return Ok(GradeResult::builder()
+                            .requirement(self.req_name.clone())
+                            .grade(Grade::new(0.0, self.out_of))
+                            .reason(reason)
+                            .prompt(prompt_messages)
+                            .build());
+                    }
+                }
+            }
+        };
 
-        let response = client.chat().create(request).await?;
+        let runtime_gate = !self.execute_files || runtime_gate_passed;
+        let passed = runtime_gate && decision.pass;
+        let grade = if passed { self.out_of } else { 0.0 };
 
-        let review = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_else(|| "No review generated".to_string());
-
-        // For now, we give full marks if the code executes without errors
-        // The LLM review is provided as feedback
-        let grade = self.out_of;
+        let mut reason_sections = vec![decision.feedback_markdown];
+        if self.execute_files {
+            if !runtime_gate_passed {
+                reason_sections
+                    .push(format!("Runtime gate failed: {}", runtime_failures.join(" | ")));
+            }
+        } else {
+            reason_sections
+                .push("Runtime gate bypassed because `execute_files=false`.".to_string());
+        }
+        if !decision.pass {
+            if decision.reasons.is_empty() {
+                reason_sections.push("LLM pass/fail gate failed.".to_string());
+            } else {
+                reason_sections
+                    .push(format!("LLM pass/fail gate failed: {}", decision.reasons.join("; ")));
+            }
+        }
 
         Ok(GradeResult::builder()
             .requirement(self.req_name.clone())
             .grade(Grade::new(grade, self.out_of))
-            .reason(review)
-            .prompt(messages)
+            .reason(reason_sections.join("\n\n"))
+            .prompt(prompt_messages)
             .build())
     }
 }

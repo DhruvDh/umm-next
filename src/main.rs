@@ -21,6 +21,7 @@ use self_update::cargo_crate_version;
 use tracing::{Level, metadata::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, util::SubscriberInitExt};
 use umm::{
+    config,
     java::Project as JavaProject,
     process,
     python::{
@@ -114,9 +115,9 @@ fn options() -> Cmd {
         f().many()
     }
 
-    /// parses Assignment name or path to grading script file
+    /// parses path to grading script file
     fn g() -> impl Parser<String> {
-        positional("NAME/PATH").help("Name of assignment in database or path to grading script")
+        positional("SCRIPT_PATH").help("Path to grading script file")
     }
 
     // Java commands
@@ -343,7 +344,7 @@ async fn run_cli() -> Result<()> {
                     process::StdinSource::Null,
                     spec.cwd.as_deref(),
                     &spec.env,
-                    None,
+                    Some(config::python_lint_timeout()),
                 )
                 .await?;
 
@@ -374,7 +375,7 @@ async fn run_cli() -> Result<()> {
                     process::StdinSource::Null,
                     spec.cwd.as_deref(),
                     &spec.env,
-                    None,
+                    Some(config::python_lint_timeout()),
                 )
                 .await?;
 

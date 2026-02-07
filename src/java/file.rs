@@ -9,7 +9,12 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use snailquote::unescape;
 
-use super::{parser::Parser, parsers::parser, paths::ProjectPaths, project::Project};
+use super::{
+    parser::Parser,
+    parsers::parser,
+    paths::ProjectPaths,
+    project::{NameResolution, Project},
+};
 use crate::{
     Dict, config,
     java::{
@@ -860,26 +865,38 @@ impl File {
                 }
 
                 if let Ok(diag) = parser::junit_stacktrace_line_ref(line) {
-                    if let Some(proj) = project
-                        && proj.identify(diag.file_name()).is_ok()
-                    {
-                        new_output.push(normalize_stacktrace_line(line));
+                    match project.map(|proj| proj.resolve_name(diag.file_name())) {
+                        Some(NameResolution::Unique(_)) => {
+                            new_output.push(normalize_stacktrace_line(line));
+                            diags.push(diag);
+                        }
+                        Some(NameResolution::Ambiguous(_)) => {
+                            new_output.push(normalize_stacktrace_line(line));
+                        }
+                        Some(NameResolution::NotFound) => {}
+                        None => diags.push(diag),
                     }
-                    diags.push(diag);
                 } else if let Ok(diag) = parser::parse_diag(line) {
-                    if let Some(proj) = project
-                        && proj.identify(diag.file_name()).is_ok()
-                    {
-                        new_output.push(normalize_stacktrace_line(line));
+                    match project.map(|proj| proj.resolve_name(diag.file_name())) {
+                        Some(NameResolution::Unique(_)) => {
+                            new_output.push(normalize_stacktrace_line(line));
+                            diags.push(diag.into());
+                        }
+                        Some(NameResolution::Ambiguous(_)) => {
+                            new_output.push(normalize_stacktrace_line(line));
+                        }
+                        Some(NameResolution::NotFound) => {}
+                        None => diags.push(diag.into()),
                     }
-                    diags.push(diag.into());
                 } else {
                     new_output.push(normalize_stacktrace_line(line));
                 }
             }
 
             if let Some(proj) = project {
-                diags.retain(|diag| proj.identify(diag.file_name()).is_ok());
+                diags.retain(|diag| {
+                    matches!(proj.resolve_name(diag.file_name()), NameResolution::Unique(_))
+                });
             }
 
             Err(JavaFileError::FailedTests {

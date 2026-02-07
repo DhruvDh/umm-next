@@ -315,7 +315,7 @@ impl File {
             StdinSource::Null,
             spec.cwd.as_deref(),
             &spec.env,
-            Some(Duration::from_secs(30)),
+            Some(config::python_lint_timeout()),
         )
         .await
         .map_err(PythonFileError::Unknown)?;
@@ -419,7 +419,7 @@ impl File {
             StdinSource::Null,
             spec.cwd.as_deref(),
             &spec.env,
-            Some(Duration::from_secs(120)),
+            Some(config::python_test_timeout()),
         )
         .await
         .map_err(PythonFileError::Unknown)?;

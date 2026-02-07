@@ -66,3 +66,13 @@ fn javac_diag_parses_error_and_warning() {
 fn javac_diag_rejects_invalid_line() {
     assert!(parser::parse_diag("not a diagnostic line").is_err());
 }
+
+#[test]
+fn javac_diag_parses_windows_path() {
+    let line = r#"C:\Users\student\project\Foo.java:27: error: cannot find symbol"#;
+    let diag = parser::parse_diag(line).expect("parse windows javac error");
+
+    assert_eq!(diag.file_name(), "Foo.java");
+    assert_eq!(diag.path().display().to_string(), "C:/Users/student/project/Foo.java");
+    assert!(diag.severity().is_error());
+}
