@@ -143,6 +143,8 @@ async fn code_review_grader_uses_pass_fail_and_retry_gates() {
         r#"{"pass":true,"feedback_markdown":"Recovered after retry.","reasons":[]}"#.to_string(),
         "still-not-json".to_string(),
         "still-not-json-again".to_string(),
+        "} malformed-order {".to_string(),
+        "still-not-json-final".to_string(),
     ];
     let (endpoint, handle) = start_mock_openai(responses);
 
@@ -173,6 +175,14 @@ async fn code_review_grader_uses_pass_fail_and_retry_gates() {
             .contains("Failed to parse structured code-review decision after one retry.")
     );
 
+    let malformed_order = run_code_review(project("diff-ok"), "malformed-order").await;
+    assert_eq!(malformed_order.grade_value(), 0.0);
+    assert!(
+        malformed_order
+            .reason()
+            .contains("Invalid JSON object bounds in model response: start index")
+    );
+
     let request_count = handle.join().expect("join mock server");
-    assert_eq!(request_count, 6, "expected one request per pass/fail and two per retry case");
+    assert_eq!(request_count, 8, "expected one request per pass/fail and two per retry case");
 }

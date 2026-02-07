@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use serde_json::Value;
+use uuid::Uuid;
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -15,13 +16,35 @@ fn java_project_dir(name: &str) -> PathBuf {
     fixtures_root().join("java").join(name)
 }
 
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn make_temp_workspace_from_fixture(workdir: &str) -> PathBuf {
+    let src = java_project_dir(workdir);
+    let dst = std::env::temp_dir().join(format!("umm-gradescope-{}", Uuid::new_v4()));
+    copy_dir_recursive(&src, &dst).expect("copy fixture workspace");
+    dst
+}
+
 fn run_java_grading_script(
     script: &str,
     workdir: &str,
     env: &[(&str, &str)],
     remove_env: &[&str],
 ) -> Value {
-    let workdir = java_project_dir(workdir);
+    let workdir = make_temp_workspace_from_fixture(workdir);
     let results_path = workdir.join("results.json");
 
     let mut cmd = cargo_bin_cmd!("umm");
@@ -40,7 +63,9 @@ fn run_java_grading_script(
 
     cmd.assert().success();
     let raw = fs::read_to_string(&results_path).expect("results.json written");
-    serde_json::from_str(&raw).expect("valid results json")
+    let parsed: Value = serde_json::from_str(&raw).expect("valid results json");
+    let _ = fs::remove_dir_all(&workdir);
+    parsed
 }
 
 fn warning_codes(json: &Value) -> Vec<String> {

@@ -95,7 +95,16 @@ fn parse_review_decision(content: &str) -> Result<CodeReviewDecision> {
         let end = content
             .rfind('}')
             .context("Could not find JSON object end in model response")?;
-        let slice = &content[start..=end];
+        if start > end {
+            return Err(anyhow!(
+                "Invalid JSON object bounds in model response: start index {} exceeds end index {}",
+                start,
+                end
+            ));
+        }
+        let slice = content
+            .get(start..=end)
+            .context("Failed to extract JSON slice from model response")?;
         serde_json::from_str(slice).context("Failed to parse extracted JSON")
     })
 }
