@@ -145,6 +145,8 @@ async fn code_review_grader_uses_pass_fail_and_retry_gates() {
         "still-not-json-again".to_string(),
         "} malformed-order {".to_string(),
         "still-not-json-final".to_string(),
+        r#"{"pass":true,"feedback_markdown":"Interactive flow accepted.","reasons":[]}"#
+            .to_string(),
     ];
     let (endpoint, handle) = start_mock_openai(responses);
 
@@ -183,6 +185,14 @@ async fn code_review_grader_uses_pass_fail_and_retry_gates() {
             .contains("Invalid JSON object bounds in model response: start index")
     );
 
+    let stdin_required = run_code_review(project("diff-stdin"), "stdin-required").await;
+    assert_eq!(stdin_required.grade_value(), 2.0);
+    assert!(
+        stdin_required
+            .reason()
+            .contains("Runtime check skipped for stdin-dependent file(s)")
+    );
+
     let request_count = handle.join().expect("join mock server");
-    assert_eq!(request_count, 8, "expected one request per pass/fail and two per retry case");
+    assert_eq!(request_count, 9, "expected one request per pass/fail and two per retry case");
 }

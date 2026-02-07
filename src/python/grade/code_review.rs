@@ -19,7 +19,10 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 
 use super::results::{Grade, GradeResult};
-use crate::{config, python::Project};
+use crate::{
+    config,
+    python::{Project, PythonFileError},
+};
 
 /// Input information for a Python script (sample inputs for stdin).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -128,6 +131,17 @@ async fn request_model_review(
         .unwrap_or_else(|| "No review generated".to_string()))
 }
 
+/// Returns true when execution failed only because stdin was unavailable.
+fn is_missing_stdin_runtime_error(error: &PythonFileError) -> bool {
+    match error {
+        PythonFileError::RuntimeError { stacktrace, .. } => {
+            let lower = stacktrace.to_ascii_lowercase();
+            lower.contains("eoferror") || lower.contains("eof when reading a line")
+        }
+        _ => false,
+    }
+}
+
 impl CodeReviewGrader {
     /// Builds and runs the grader.
     pub async fn run(self) -> Result<GradeResult> {
@@ -146,6 +160,7 @@ impl CodeReviewGrader {
         let mut prompt_content = String::new();
         let mut runtime_gate_passed = true;
         let mut runtime_failures = Vec::new();
+        let mut runtime_skipped_stdin = Vec::new();
 
         if let Some(ref path) = self.instructions_path
             && let Ok(content) = std::fs::read_to_string(path)
@@ -185,9 +200,17 @@ impl CodeReviewGrader {
                         prompt_content.push_str("\n```\n\n");
                     }
                     Err(e) => {
-                        runtime_gate_passed = false;
-                        runtime_failures.push(format!("{}: {}", file.file_name(), e));
-                        prompt_content.push_str(&format!("**Error:** {}\n\n", e));
+                        if is_missing_stdin_runtime_error(&e) {
+                            runtime_skipped_stdin.push(file.file_name().to_string());
+                            prompt_content.push_str(
+                                "**Execution skipped:** missing stdin input (interactive \
+                                 `input()` expected).\n\n",
+                            );
+                        } else {
+                            runtime_gate_passed = false;
+                            runtime_failures.push(format!("{}: {}", file.file_name(), e));
+                            prompt_content.push_str(&format!("**Error:** {}\n\n", e));
+                        }
                     }
                 }
             }
@@ -289,6 +312,12 @@ impl CodeReviewGrader {
 
         let mut reason_sections = vec![decision.feedback_markdown];
         if self.execute_files {
+            if !runtime_skipped_stdin.is_empty() {
+                reason_sections.push(format!(
+                    "Runtime check skipped for stdin-dependent file(s) with no sample input: {}",
+                    runtime_skipped_stdin.join(", ")
+                ));
+            }
             if !runtime_gate_passed {
                 reason_sections
                     .push(format!("Runtime gate failed: {}", runtime_failures.join(" | ")));
