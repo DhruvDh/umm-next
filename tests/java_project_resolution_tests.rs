@@ -76,3 +76,18 @@ fn identify_requires_disambiguation_for_duplicate_simple_names() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn contains_treats_ambiguous_simple_names_as_present() {
+    let root = temp_root();
+    write_java(&root.join("src/pkg1/Main.java"), "pkg1", "Main");
+    write_java(&root.join("src/pkg2/Main.java"), "pkg2", "Main");
+
+    let project = build_project(&root);
+
+    assert!(project.contains("Main"));
+    assert!(project.contains("pkg1.Main"));
+    assert!(!project.contains("DoesNotExist"));
+
+    let _ = fs::remove_dir_all(root);
+}

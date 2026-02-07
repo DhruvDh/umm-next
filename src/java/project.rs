@@ -124,7 +124,7 @@ impl Project {
 
     /// Returns true if project contains a file with the given name.
     pub fn contains(&self, name: &str) -> bool {
-        matches!(self.resolve_name(name), NameResolution::Unique(_))
+        !matches!(self.resolve_name(name), NameResolution::NotFound)
     }
 
     /// Returns the workspace paths associated with this project.
