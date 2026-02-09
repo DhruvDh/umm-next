@@ -3,8 +3,6 @@
 
 //! Test graders for Python (pytest, unittest).
 
-use std::time::Duration;
-
 use anyhow::{Result, bail};
 use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
@@ -76,7 +74,7 @@ impl TestGrader {
             StdinSource::Null,
             spec.cwd.as_deref(),
             &spec.env,
-            Some(Duration::from_secs(120)),
+            Some(config::python_test_timeout()),
         )
         .await?;
 

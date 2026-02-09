@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use umm::java::{Project, grade::diff::DiffGrader, paths::ProjectPaths};
 
@@ -12,6 +16,35 @@ fn fixture_root(name: &str) -> PathBuf {
 fn project(name: &str) -> Project {
     let root = fixture_root(name);
     let paths = ProjectPaths::from_parts(root, None, None, None, None, None, None);
+    Project::from_paths(paths).expect("build project")
+}
+
+fn temp_root(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("umm-java-diff-{prefix}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(root.join("src/pkg1")).expect("create pkg1");
+    fs::create_dir_all(root.join("src/pkg2")).expect("create pkg2");
+    root
+}
+
+fn write_file(path: &Path, contents: &str) {
+    fs::write(path, contents).expect("write java file");
+}
+
+fn project_from_root(root: &Path) -> Project {
+    let paths = ProjectPaths::from_parts(
+        root.to_path_buf(),
+        Some(root.join("src")),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
     Project::from_paths(paths).expect("build project")
 }
 
@@ -168,4 +201,52 @@ async fn diff_errors_when_no_cases() {
 
     let err = grader.run().await;
     assert!(err.is_err(), "expected missing cases error");
+}
+
+#[tokio::test]
+async fn diff_compile_failure_with_ambiguous_simple_names_degrades_gracefully() {
+    let root = temp_root("ambiguous-compile");
+    write_file(
+        &root.join("src/pkg1/Main.java"),
+        r#"package pkg1;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("broken")
+    }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/pkg2/Main.java"),
+        r#"package pkg2;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("ok");
+    }
+}
+"#,
+    );
+
+    let proj = project_from_root(&root);
+    let grader = DiffGrader::builder()
+        .req_name("ambiguous-compile")
+        .out_of(1.0)
+        .project(proj)
+        .file("pkg1.Main")
+        .cases(vec![("irrelevant", None::<String>)])
+        .build()
+        .run()
+        .await
+        .expect("compile failure should return a grade result");
+
+    assert_eq!(grader.grade_value(), 0.0);
+    assert!(
+        grader
+            .reason()
+            .contains("Error compiling file for some cases.")
+    );
+
+    let _ = fs::remove_dir_all(root);
 }

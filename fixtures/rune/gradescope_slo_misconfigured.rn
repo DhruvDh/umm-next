@@ -1,0 +1,28 @@
+use umm::gradescope::GradescopeConfig;
+use umm::java::{new_diff_grader, new_project, show_results_with_config};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    let diff = new_diff_grader()
+        .project(project)
+        .file("Main")
+        .req_name("slo-misconfigured")
+        .out_of(2.0)
+        .cases([("Hello from Rune\n", None)])
+        .run()
+        .await?;
+
+    let cfg = GradescopeConfig::builder()
+        .results_json(true)
+        .debug(true)
+        .show_table(false)
+        .source_files(["DoesNotExist"])
+        .project_title("Rune Hello")
+        .project_description("Fixture to verify non-fatal SLO file-selection errors")
+        .enabled_slos(["slo_logic"])
+        .build();
+
+    show_results_with_config([diff], cfg)?;
+    Ok(())
+}

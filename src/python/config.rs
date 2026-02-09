@@ -117,6 +117,12 @@ impl PythonConfig {
         self
     }
 
+    /// Returns a new config with a custom lint timeout.
+    pub fn with_lint_timeout(mut self, timeout: Duration) -> Self {
+        self.lint_timeout = timeout;
+        self
+    }
+
     /// Returns a new config with a custom test timeout.
     pub fn with_test_timeout(mut self, timeout: Duration) -> Self {
         self.test_timeout = timeout;

@@ -17,12 +17,14 @@ use state::InitCell;
 
 use crate::{
     java::config::{JavaConfig, JavaPrompts},
-    python::config::PythonPrompts,
+    python::config::{PythonConfig, PythonPrompts},
     retrieval::HeuristicConfig,
 };
 
 /// Prompt truncation length for generated feedback payloads.
 pub const PROMPT_TRUNCATE: usize = 60_000;
+/// Default endpoint used for active retrieval requests.
+pub const DEFAULT_RETRIEVAL_ENDPOINT: &str = "https://umm-feedback-openai-func.deno.dev/";
 
 /// Supabase credentials loaded from the environment, if available.
 #[derive(Clone)]
@@ -170,6 +172,8 @@ pub struct ConfigState {
     http_client:         Client,
     /// Java-specific configuration bundle.
     java_config:         JavaConfig,
+    /// Python-specific configuration bundle.
+    python_config:       PythonConfig,
     /// Course identifier exposed to Supabase-backed endpoints.
     course:              String,
     /// Academic term identifier exposed to Supabase-backed endpoints.
@@ -208,13 +212,17 @@ impl ConfigState {
             read_timeout_secs("UMM_JAVAC_TIMEOUT_SECS", 30),
             read_timeout_secs("UMM_JAVA_TIMEOUT_SECS", 60),
         );
+        let python_config = PythonConfig::default()
+            .with_python_timeout(read_timeout_secs("UMM_PYTHON_TIMEOUT_SECS", 60))
+            .with_lint_timeout(read_timeout_secs("UMM_PYTHON_LINT_TIMEOUT_SECS", 30))
+            .with_test_timeout(read_timeout_secs("UMM_PYTHON_TEST_TIMEOUT_SECS", 120));
 
         let course = std::env::var("UMM_COURSE").unwrap_or_else(|_| "ITSC 2214".to_string());
         let term = std::env::var("UMM_TERM").unwrap_or_else(|_| "Fall 2022".to_string());
 
-        let retrieval_endpoint = std::env::var("UMM_RETRIEVAL_ENDPOINT")
-            .map(|value| value.trim().to_owned())
-            .unwrap_or_else(|_| "https://umm-feedback-openai-func.deno.dev/".to_string());
+        let retrieval_endpoint = resolve_retrieval_endpoint_value(
+            std::env::var("UMM_RETRIEVAL_ENDPOINT").ok().as_deref(),
+        );
 
         let retrieval_heuristic = Mutex::new(java_config.retrieval_defaults());
 
@@ -223,6 +231,7 @@ impl ConfigState {
             postgrest: InitCell::new(),
             http_client,
             java_config,
+            python_config,
             course,
             term,
             openai: OpenAiEnv::from_env(),
@@ -389,6 +398,31 @@ impl ConfigState {
     /// Returns the Java configuration bundle.
     pub fn java_config(&self) -> &JavaConfig {
         &self.java_config
+    }
+
+    /// Returns the Python configuration bundle.
+    pub fn python_config(&self) -> &PythonConfig {
+        &self.python_config
+    }
+
+    /// Returns the configured Python prompts.
+    pub fn python_prompts(&self) -> &PythonPrompts {
+        self.python_config.prompts()
+    }
+
+    /// Returns the configured Python execution timeout duration.
+    pub fn python_timeout(&self) -> Duration {
+        self.python_config.python_timeout()
+    }
+
+    /// Returns the configured Python lint timeout duration.
+    pub fn python_lint_timeout(&self) -> Duration {
+        self.python_config.lint_timeout()
+    }
+
+    /// Returns the configured Python test timeout duration.
+    pub fn python_test_timeout(&self) -> Duration {
+        self.python_config.test_timeout()
     }
 }
 
@@ -601,12 +635,27 @@ pub fn java_timeout() -> Duration {
 
 /// Returns the configured Python timeout duration.
 pub fn python_timeout() -> Duration {
-    read_timeout_secs("UMM_PYTHON_TIMEOUT_SECS", 60)
+    get().python_timeout()
+}
+
+/// Returns the configured Python lint timeout duration.
+pub fn python_lint_timeout() -> Duration {
+    get().python_lint_timeout()
+}
+
+/// Returns the configured Python test timeout duration.
+pub fn python_test_timeout() -> Duration {
+    get().python_test_timeout()
+}
+
+/// Returns the configured Python configuration bundle.
+pub fn python_config() -> PythonConfig {
+    get().python_config().clone()
 }
 
 /// Returns the Python prompts bundle.
 pub fn python_prompts() -> PythonPrompts {
-    PythonPrompts::default()
+    get().python_prompts().clone()
 }
 
 /// Returns the OpenAI environment configuration, if available.
@@ -617,9 +666,24 @@ pub fn openai_env() -> Option<OpenAiEnv> {
 /// Parses an environment variable into a `Duration`, falling back to
 /// `default_secs` when parsing fails or the variable is missing.
 fn read_timeout_secs(env: &str, default_secs: u64) -> Duration {
-    std::env::var(env)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
+    parse_timeout_secs_value(std::env::var(env).ok().as_deref(), default_secs)
+}
+
+/// Parses a timeout value from an optional string.
+pub fn parse_timeout_secs_value(value: Option<&str>, default_secs: u64) -> Duration {
+    value
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(default_secs))
+}
+
+/// Normalizes optional retrieval endpoint overrides.
+pub fn resolve_retrieval_endpoint_value(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| DEFAULT_RETRIEVAL_ENDPOINT.to_string())
 }

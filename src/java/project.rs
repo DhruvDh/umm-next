@@ -1,6 +1,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, anyhow};
 use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
@@ -31,6 +33,17 @@ pub struct Project {
     names: Vec<String>,
     /// Workspace paths associated with this project
     paths: ProjectPaths,
+}
+
+/// Resolution state for file-name lookups.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NameResolution {
+    /// No matching file was found.
+    NotFound,
+    /// A unique file match was found at the given index.
+    Unique(usize),
+    /// Multiple files matched; caller must disambiguate.
+    Ambiguous(Vec<usize>),
 }
 
 impl Project {
@@ -92,15 +105,26 @@ impl Project {
     ///
     /// * `name`: partial/fully formed name of the Java file to look for.
     pub fn identify(&self, name: &str) -> Result<File> {
-        let Some(index) = self.match_index(name) else {
-            return Err(anyhow!("Could not find {} in the project", name));
-        };
-        Ok(self.files[index].clone())
+        match self.resolve_name(name) {
+            NameResolution::Unique(index) => Ok(self.files[index].clone()),
+            NameResolution::Ambiguous(indices) => {
+                let candidates = indices
+                    .into_iter()
+                    .map(|idx| self.candidate_label(idx))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(anyhow!(
+                    "Ambiguous file reference '{name}'. Use a package-qualified name or path. \
+                     Candidates: {candidates}"
+                ))
+            }
+            NameResolution::NotFound => Err(anyhow!("Could not find {name} in the project")),
+        }
     }
 
     /// Returns true if project contains a file with the given name.
     pub fn contains(&self, name: &str) -> bool {
-        self.match_index(name).is_some()
+        !matches!(self.resolve_name(name), NameResolution::NotFound)
     }
 
     /// Returns the workspace paths associated with this project.
@@ -141,32 +165,53 @@ impl Project {
 }
 
 impl Project {
-    /// Attempts to locate the index of a file that matches the provided name.
-    fn match_index(&self, name: &str) -> Option<usize> {
+    /// Resolves a lookup key against staged name-resolution rules.
+    pub(crate) fn resolve_name(&self, name: &str) -> NameResolution {
+        for matches in [
+            self.match_indices(|file| file.path().display().to_string() == name),
+            self.match_name_indices(name),
+            self.match_indices(|file| file.file_name() == name),
+            self.match_indices(|file| file.file_name().trim_end_matches(".java") == name),
+            self.match_indices(|file| file.simple_name() == name),
+        ] {
+            match matches.len() {
+                0 => continue,
+                1 => return NameResolution::Unique(matches[0]),
+                _ => return NameResolution::Ambiguous(matches),
+            }
+        }
+
+        NameResolution::NotFound
+    }
+
+    /// Returns indices matching the provided predicate in stable order.
+    fn match_indices<F>(&self, mut predicate: F) -> Vec<usize>
+    where
+        F: FnMut(&File) -> bool,
+    {
+        self.files
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, file)| predicate(file).then_some(idx))
+            .collect()
+    }
+
+    /// Returns indices where the cached proper-name list matches `name`.
+    fn match_name_indices(&self, name: &str) -> Vec<usize> {
         self.names
             .iter()
-            .position(|n| n == name)
-            .or_else(|| self.files.iter().position(|file| file.file_name() == name))
-            .or_else(|| {
-                self.files
-                    .iter()
-                    .position(|file| file.file_name().trim_end_matches(".java") == name)
-            })
-            .or_else(|| {
-                self.files
-                    .iter()
-                    .position(|file| file.simple_name() == name)
-            })
-            .or_else(|| {
-                self.files
-                    .iter()
-                    .position(|file| file.path().display().to_string() == name)
-            })
-            .or_else(|| {
-                self.files
-                    .iter()
-                    .position(|file| file.proper_name() == name)
-            })
+            .enumerate()
+            .filter_map(|(idx, proper_name)| (proper_name == name).then_some(idx))
+            .collect()
+    }
+
+    /// Produces a human-readable label for an identified candidate.
+    fn candidate_label(&self, index: usize) -> String {
+        let file = &self.files[index];
+        let mut parts = BTreeSet::new();
+        parts.insert(file.proper_name());
+        parts.insert(file.path().display().to_string());
+        parts.into_iter().collect::<Vec<_>>().join(" | ")
     }
 }
 

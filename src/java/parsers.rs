@@ -3,6 +3,41 @@
 
 use crate::java::grade::{JavacDiagnostic, LineRef, MutationDiagnostic};
 
+/// Normalizes javac diagnostic paths so they can be rendered consistently in
+/// results and tests.
+fn normalize_diag_path(raw: &str) -> String {
+    let normalized = raw.trim().replace('\\', "/");
+    if normalized.is_empty() {
+        return "./<unknown>".to_string();
+    }
+
+    let has_drive_prefix = normalized
+        .chars()
+        .nth(1)
+        .map(|ch| ch == ':')
+        .unwrap_or(false);
+
+    if normalized.starts_with("./")
+        || normalized.starts_with("../")
+        || normalized.starts_with('/')
+        || has_drive_prefix
+    {
+        normalized
+    } else {
+        format!("./{normalized}")
+    }
+}
+
+/// Extracts a filename from either slash- or backslash-separated diagnostic
+/// paths.
+fn diagnostic_file_name(raw: &str) -> String {
+    raw.trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw.trim())
+        .to_string()
+}
+
 peg::parser! {
     /// includes some useful grammars for parsing JUNit/javac/pitest outputs.
     pub grammar parser() for str {
@@ -67,12 +102,14 @@ peg::parser! {
             { w.iter().collect::<String>() }
 
         /// matches any valid path, hopefully
+        rule line_number_start() = ":" ['0'..='9']+ ":"
+
+        /// matches the path prefix in a javac diagnostic line.
         rule path() -> String
             = whitespace()?
-              path_separator()?
-              p:(word() ++ path_separator())
+              p:$((!line_number_start() [_])+)
               whitespace()?
-            { p.iter().fold(String::new(), |acc, w| format!("{acc}/{w}")) }
+            { p.to_string() }
 
         /// matches line numbers (colon followed by numbers, eg. :23)
         rule line_number() -> u32
@@ -95,12 +132,9 @@ peg::parser! {
         pub rule parse_diag() -> JavacDiagnostic
             = p:path() l:line_number() d:diag_type() m:diagnostic()
             {
-                let p = std::path::PathBuf::from(p);
-            let name = p
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.display().to_string());
-            let display_path = format!(".{}", p.display());
+            let raw_path = p.trim();
+            let name = super::diagnostic_file_name(raw_path);
+            let display_path = super::normalize_diag_path(raw_path);
 
             JavacDiagnostic::builder()
                 .path(display_path)

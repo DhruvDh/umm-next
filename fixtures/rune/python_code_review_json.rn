@@ -1,0 +1,23 @@
+use umm::gradescope::GradescopeConfig;
+use umm::python::{new_code_review_grader, new_project, show_results_with_config};
+
+pub async fn main() {
+    let project = new_project()?;
+
+    let review = new_code_review_grader()
+        .project(project)
+        .files(["main.py"])
+        .req_name("python-code-review")
+        .out_of(2.0)
+        .run()
+        .await?;
+
+    let cfg = GradescopeConfig::builder()
+        .results_json(true)
+        .debug(true)
+        .show_table(false)
+        .build();
+
+    show_results_with_config([review], cfg)?;
+    Ok(())
+}

@@ -29,8 +29,10 @@ pub fn find_files(extension: &str, search_depth: i8, root_dir: &Path) -> Result<
         .context("Could not convert root_dir to string")?
         .to_string();
 
-    Ok(glob(&pattern)
+    let mut files: Vec<PathBuf> = glob(&pattern)
         .context("Could not create glob")?
         .filter_map(Result::ok)
-        .collect())
+        .collect();
+    files.sort();
+    Ok(files)
 }

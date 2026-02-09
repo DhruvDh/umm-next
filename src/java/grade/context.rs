@@ -177,26 +177,31 @@ fn merge_ranges(
     ranges: Vec<(File, LineRef, RangeInclusive<usize>)>,
     num_lines: usize,
 ) -> Vec<(File, LineRef, RangeInclusive<usize>)> {
-    ranges
-        .into_iter()
-        .coalesce(|lhs, rhs| {
-            if lhs.0 == rhs.0 {
-                let lhs_start = *lhs.2.start();
-                let lhs_end = *lhs.2.end();
-                let rhs_start = *rhs.2.start();
-                let rhs_end = *rhs.2.end();
-                let expanded_range = rhs_start.saturating_sub(num_lines)..=(rhs_end + num_lines);
+    let mut merged: Vec<(File, LineRef, RangeInclusive<usize>)> = Vec::new();
 
-                if expanded_range.contains(&lhs_start) || expanded_range.contains(&lhs_end) {
-                    Ok((lhs.0, lhs.1, lhs_start..=rhs_end))
-                } else {
-                    Err((lhs, rhs))
-                }
-            } else {
-                Err((lhs, rhs))
+    for (file, line_ref, range) in ranges {
+        if let Some((last_file, _last_line_ref, last_range)) = merged.last_mut()
+            && *last_file == file
+        {
+            let last_start = *last_range.start();
+            let last_end = *last_range.end();
+            let current_start = *range.start();
+            let current_end = *range.end();
+
+            let expanded_start = current_start.saturating_sub(num_lines);
+            let expanded_end = current_end.saturating_add(num_lines);
+            if expanded_start <= last_end && expanded_end >= last_start {
+                let new_start = last_start.min(current_start);
+                let new_end = last_end.max(current_end);
+                *last_range = new_start..=new_end;
+                continue;
             }
-        })
-        .collect()
+        }
+
+        merged.push((file, line_ref, range));
+    }
+
+    merged
 }
 
 /// Renders a source snippet and returns the numbered lines alongside discovered

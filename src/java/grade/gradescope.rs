@@ -3,7 +3,7 @@
 
 use std::{collections::HashSet, fs, io::Write};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use async_openai::{
     Client as OpenAIClient,
     config::OpenAIConfig,
@@ -281,11 +281,53 @@ enum SLOFileType {
     SourceAndTest,
 }
 
-/// Renders the combined SLO report used in Gradescope artifacts.
-async fn generate_combined_slo_report(
-    slo_responses: Vec<(&str, Result<CreateChatCompletionResponse, OpenAIError>)>,
-    openai: &OpenAiEnv,
-) -> Result<String> {
+/// Non-fatal warning captured while assembling a Gradescope artifact.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GradescopeWarning {
+    /// Stable warning code that callers can parse.
+    code:    String,
+    /// Scope for the warning (requirement name, SLO key, or submission-level).
+    scope:   String,
+    /// Human-readable warning details.
+    message: String,
+}
+
+/// Builds a warning payload and appends it to the warning list.
+fn record_warning(
+    warnings: &mut Vec<GradescopeWarning>,
+    code: &str,
+    scope: impl Into<String>,
+    message: impl Into<String>,
+) -> GradescopeWarning {
+    let warning = GradescopeWarning {
+        code:    code.to_string(),
+        scope:   scope.into(),
+        message: message.into(),
+    };
+    eprintln!("Gradescope warning [{}:{}] {}", warning.code, warning.scope, warning.message);
+    warnings.push(warning.clone());
+    warning
+}
+
+/// Renders a single warning line suitable for test-case markdown output.
+fn warning_line(warning: &GradescopeWarning) -> String {
+    format!("[warning:{}:{}] {}", warning.code, warning.scope, warning.message)
+}
+
+/// Renders a submission-level warning summary in markdown.
+fn warning_summary(warnings: &[GradescopeWarning]) -> String {
+    let mut lines = vec!["Autograder completed with warnings:".to_string()];
+    for warning in warnings {
+        lines.push(format!("- {} (`{}::{}`)", warning.message, warning.code, warning.scope));
+    }
+    lines.join("\n")
+}
+
+/// Renders per-SLO feedback that can be used directly or as fallback when
+/// combined report synthesis fails.
+fn render_individual_slo_feedback(
+    slo_responses: &[(&str, Result<CreateChatCompletionResponse, OpenAIError>)],
+) -> String {
     let mut individual_feedbacks = Vec::new();
 
     for (name, resp) in slo_responses {
@@ -299,7 +341,6 @@ async fn generate_combined_slo_report(
                 individual_feedbacks.push(format!("SLO: {}\n\n{}", name, content));
             }
             Err(e) => {
-                // Log the error or handle it as appropriate for your use case
                 eprintln!("Error processing SLO '{}': {:?}", name, e);
                 individual_feedbacks
                     .push(format!("SLO: {}\n\nError: Unable to process this SLO.", name));
@@ -307,7 +348,15 @@ async fn generate_combined_slo_report(
         }
     }
 
-    let combined_feedback = individual_feedbacks.join("\n\n---\n\n");
+    individual_feedbacks.join("\n\n---\n\n")
+}
+
+/// Renders the combined SLO report used in Gradescope artifacts.
+async fn generate_combined_slo_report(
+    slo_responses: &[(&str, Result<CreateChatCompletionResponse, OpenAIError>)],
+    openai: &OpenAiEnv,
+) -> Result<String> {
+    let combined_feedback = render_individual_slo_feedback(slo_responses);
 
     let openai_client = OpenAIClient::with_config(
         OpenAIConfig::new()
@@ -381,7 +430,10 @@ async fn generate_slo_responses(
     project_description: &str,
     enabled_slos: &HashSet<String>,
     openai: &OpenAiEnv,
-) -> Result<Vec<(&'static str, Result<CreateChatCompletionResponse, OpenAIError>)>> {
+) -> Result<(
+    Vec<(&'static str, Result<CreateChatCompletionResponse, OpenAIError>)>,
+    Vec<GradescopeWarning>,
+)> {
     let prompts = config::java_prompts();
     let slos = vec![
         (
@@ -426,6 +478,7 @@ async fn generate_slo_responses(
     ];
 
     let mut slo_requests = Vec::new();
+    let mut warnings = Vec::new();
 
     for (slo_key, slo_name, slo_system_message, slo_file_type) in slos {
         if !enabled_slos.contains(slo_key) {
@@ -453,12 +506,18 @@ async fn generate_slo_responses(
             .map(|x| x.code().to_string())
             .collect();
 
-        ensure!(
-            !relevant_file_codes.is_empty(),
-            "No relevant files ({:?}) with source code found for SLO {}",
-            slo_file_type,
-            slo_name
-        );
+        if relevant_file_codes.is_empty() {
+            record_warning(
+                &mut warnings,
+                "SLO_NO_RELEVANT_FILES",
+                slo_key,
+                format!(
+                    "Skipping SLO '{}' because no relevant source code was found for {:?}",
+                    slo_name, slo_file_type
+                ),
+            );
+            continue;
+        }
 
         let mut student_message = vec![format!(
             "# Submission for {project_title}\n\nDescription: {project_description}"
@@ -513,7 +572,7 @@ async fn generate_slo_responses(
     }
 
     let slo_responses = futures::future::join_all(slo_requests).await;
-    Ok(slo_responses)
+    Ok((slo_responses, warnings))
 }
 
 /// Print grade results to stderr and optionally emit a Gradescope JSON
@@ -559,14 +618,25 @@ pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Resul
     }
 
     if gradescope_json {
-        let project = Project::new()?;
+        let mut warnings = Vec::new();
         let mut test_cases = vec![];
+
         for result in &results {
-            let feedback = if gradescope_feedback {
-                generate_single_feedback(result)?
-            } else {
-                String::new()
-            };
+            let mut feedback_lines = Vec::new();
+            if gradescope_feedback {
+                match generate_single_feedback(result) {
+                    Ok(feedback) => feedback_lines.push(feedback),
+                    Err(err) => {
+                        let warning = record_warning(
+                            &mut warnings,
+                            "SUPABASE_FEEDBACK_FAILED",
+                            result.requirement.clone(),
+                            format!("Could not generate detailed feedback: {err:#}"),
+                        );
+                        feedback_lines.push(warning_line(&warning));
+                    }
+                }
+            }
 
             let test_case = GradescopeTestCase::builder()
                 .name(result.requirement.clone())
@@ -578,7 +648,7 @@ pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Resul
                 } else {
                     GradescopeStatus::Failed
                 })
-                .output(feedback)
+                .output(feedback_lines.join("\n"))
                 .output_format(GradescopeOutputFormat::Md)
                 .build();
 
@@ -586,82 +656,194 @@ pub fn show_result(results: Vec<GradeResult>, config: GradescopeConfig) -> Resul
         }
 
         if grade > pass_threshold * out_of && !enabled_slos.is_empty() {
-            ensure!(
-                !project_title.is_empty(),
-                "Project title must be specified to generate SLO feedback"
-            );
-            ensure!(
-                !project_description.is_empty(),
-                "Project description must be specified to generate SLO feedback"
-            );
+            if project_title.trim().is_empty() {
+                record_warning(
+                    &mut warnings,
+                    "SLO_PROJECT_TITLE_MISSING",
+                    "submission",
+                    "Skipping SLO feedback because project title is empty",
+                );
+            } else if project_description.trim().is_empty() {
+                record_warning(
+                    &mut warnings,
+                    "SLO_PROJECT_DESCRIPTION_MISSING",
+                    "submission",
+                    "Skipping SLO feedback because project description is empty",
+                );
+            } else if let Some(openai_env) = config::openai_config() {
+                match Project::new() {
+                    Ok(project) => {
+                        let env_ref = &openai_env;
+                        let slo_responses = match tokio::runtime::Handle::try_current() {
+                            Ok(handle) => block_in_place(|| {
+                                handle.block_on(async {
+                                    generate_slo_responses(
+                                        &project,
+                                        &source_files,
+                                        &test_files,
+                                        &project_title,
+                                        &project_description,
+                                        &enabled_slos,
+                                        env_ref,
+                                    )
+                                    .await
+                                })
+                            }),
+                            Err(_) => Runtime::new()
+                                .context(
+                                    "Failed to create Tokio runtime for SLO feedback generation",
+                                )?
+                                .block_on(async {
+                                    generate_slo_responses(
+                                        &project,
+                                        &source_files,
+                                        &test_files,
+                                        &project_title,
+                                        &project_description,
+                                        &enabled_slos,
+                                        env_ref,
+                                    )
+                                    .await
+                                }),
+                        };
 
-            let openai_env = config::openai_config().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "OPENAI_ENDPOINT, OPENAI_API_KEY_SLO, and OPENAI_MODEL must be set to \
-                     generate SLO feedback"
-                )
-            })?;
+                        match slo_responses {
+                            Ok((responses, mut slo_warnings)) => {
+                                warnings.append(&mut slo_warnings);
 
-            let env_ref = &openai_env;
-            let slo_responses = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => block_in_place(|| {
-                    handle.block_on(async {
-                        generate_slo_responses(
-                            &project,
-                            &source_files,
-                            &test_files,
-                            &project_title,
-                            &project_description,
-                            &enabled_slos,
-                            env_ref,
-                        )
-                        .await
-                    })
-                })?,
-                Err(_) => Runtime::new()
-                    .context("Failed to create Tokio runtime for SLO feedback generation")?
-                    .block_on(async {
-                        generate_slo_responses(
-                            &project,
-                            &source_files,
-                            &test_files,
-                            &project_title,
-                            &project_description,
-                            &enabled_slos,
-                            env_ref,
-                        )
-                        .await
-                    })?,
-            };
+                                if responses.is_empty() {
+                                    record_warning(
+                                        &mut warnings,
+                                        "SLO_NO_RESPONSES",
+                                        "submission",
+                                        "No SLO prompts were executed; skipping SLO report",
+                                    );
+                                } else {
+                                    let combined_report =
+                                        match tokio::runtime::Handle::try_current() {
+                                            Ok(handle) => block_in_place(|| {
+                                                handle.block_on(async {
+                                                    generate_combined_slo_report(
+                                                        &responses, env_ref,
+                                                    )
+                                                    .await
+                                                })
+                                            }),
+                                            Err(_) => Runtime::new()
+                                                .context(
+                                                    "Failed to create Tokio runtime for SLO \
+                                                     report generation",
+                                                )?
+                                                .block_on(async {
+                                                    generate_combined_slo_report(
+                                                        &responses, env_ref,
+                                                    )
+                                                    .await
+                                                }),
+                                        };
 
-            let combined_report = match (tokio::runtime::Handle::try_current(), slo_responses) {
-                (Ok(handle), responses) => block_in_place(move || {
-                    handle.block_on(async move {
-                        generate_combined_slo_report(responses, env_ref).await
-                    })
-                })?,
-                (Err(_), responses) => Runtime::new()
-                    .context("Failed to create Tokio runtime for SLO report generation")?
-                    .block_on(async { generate_combined_slo_report(responses, env_ref).await })?,
-            };
-
-            test_cases.push(
-                GradescopeTestCase::builder()
-                    .name("Student Learning Outcomes (SLOs) Feedback".to_string())
-                    .name_format(GradescopeOutputFormat::Text)
-                    .output(combined_report)
-                    .output_format(GradescopeOutputFormat::Md)
-                    .max_score(0f64)
-                    .score(0f64)
-                    .build(),
-            );
+                                    match combined_report {
+                                        Ok(report) => test_cases.push(
+                                            GradescopeTestCase::builder()
+                                                .name(
+                                                    "Student Learning Outcomes (SLOs) Feedback"
+                                                        .to_string(),
+                                                )
+                                                .name_format(GradescopeOutputFormat::Text)
+                                                .output(report)
+                                                .output_format(GradescopeOutputFormat::Md)
+                                                .max_score(0f64)
+                                                .score(0f64)
+                                                .build(),
+                                        ),
+                                        Err(err) => {
+                                            let warning = record_warning(
+                                                &mut warnings,
+                                                "SLO_COMBINED_REPORT_FAILED",
+                                                "submission",
+                                                format!(
+                                                    "Failed to generate combined SLO report: \
+                                                     {err:#}"
+                                                ),
+                                            );
+                                            let fallback =
+                                                render_individual_slo_feedback(&responses);
+                                            test_cases.push(
+                                                GradescopeTestCase::builder()
+                                                    .name(
+                                                        "Student Learning Outcomes (SLOs) Feedback"
+                                                            .to_string(),
+                                                    )
+                                                    .name_format(GradescopeOutputFormat::Text)
+                                                    .output(format!(
+                                                        "{}\n\n{}\n\n{}",
+                                                        warning_line(&warning),
+                                                        "Falling back to individual SLO feedback.",
+                                                        fallback
+                                                    ))
+                                                    .output_format(GradescopeOutputFormat::Md)
+                                                    .max_score(0f64)
+                                                    .score(0f64)
+                                                    .build(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                record_warning(
+                                    &mut warnings,
+                                    "SLO_REQUESTS_FAILED",
+                                    "submission",
+                                    format!("Failed to generate SLO requests: {err:#}"),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        record_warning(
+                            &mut warnings,
+                            "SLO_PROJECT_DISCOVERY_FAILED",
+                            "submission",
+                            format!(
+                                "Skipping SLO feedback because project discovery failed: {err:#}"
+                            ),
+                        );
+                    }
+                }
+            } else {
+                record_warning(
+                    &mut warnings,
+                    "SLO_OPENAI_CONFIG_MISSING",
+                    "submission",
+                    "Skipping SLO feedback because OpenAI configuration is missing",
+                );
+            }
         }
+
+        let submission_output = if warnings.is_empty() {
+            None
+        } else {
+            Some(warning_summary(&warnings))
+        };
+        let submission_extra_data = if warnings.is_empty() {
+            None
+        } else {
+            Some(serde_json::json!({ "warnings": warnings }))
+        };
+
+        let submission_output_format = submission_output
+            .as_ref()
+            .map(|_| GradescopeOutputFormat::Md);
         let submission = GradescopeSubmission::builder()
             .tests(test_cases)
             .test_output_format(GradescopeOutputFormat::Md)
             .test_name_format(GradescopeOutputFormat::Text)
             .stdout_visibility(GradescopeVisibility::Visible)
             .visibility(GradescopeVisibility::Visible)
+            .maybe_output(submission_output)
+            .maybe_output_format(submission_output_format)
+            .maybe_extra_data(submission_extra_data)
             .build();
 
         let mut file = fs::File::create(if gradescope_debug {
